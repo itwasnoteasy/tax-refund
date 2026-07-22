@@ -1,0 +1,266 @@
+openapi: 3.0.3
+info:
+  title: TurboTax Refund Status PoC API
+  description: >
+    Proof-of-concept API for refund status lookup, AI-predicted ETA, and
+    notification preview. This contract is authoritative for the PoC's
+    implementation — see /docs/spec/01_SPEC.md for the full requirements
+    this API satisfies, and /docs/spec/06_SCOPE.md for what is deliberately
+    excluded from this surface.
+  version: 0.1.0-poc
+
+servers:
+  - url: http://localhost:8000
+    description: Local development
+
+paths:
+  /refund-status/{return_id}:
+    get:
+      summary: Get current refund status, prediction, and explanation for a return
+      description: >
+        Cache-first read. On a cache miss, falls through to the (mock) IRS
+        Integration Service. See /docs/spec/02_TECHNICAL_DESIGN.md §2 for the
+        cache-aside and circuit-breaker behavior this endpoint must exhibit.
+      parameters:
+        - name: return_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "RET-2026-00123"
+        - name: tax_year
+          in: query
+          required: true
+          schema:
+            type: integer
+          example: 2025
+          description: Must be one of the 3 most recent tax years for this user.
+      responses:
+        "200":
+          description: Successful lookup
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefundStatusResponse"
+        "404":
+          description: Return not found for this user/tax_year combination
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          description: Invalid tax_year (not one of the 3 most recent years)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /notifications/opt-in:
+    post:
+      summary: Opt a return in to status-change notifications
+      description: >
+        Registers opt-in for a return. Actual delivery is preview-only in
+        this PoC — see /docs/spec/06_SCOPE.md for why live send is
+        explicitly out of scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationOptInRequest"
+      responses:
+        "200":
+          description: Opt-in registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationOptInResponse"
+
+  /notifications/preview/{return_id}:
+    get:
+      summary: Render the notification email preview for a return
+      description: >
+        Returns the rendered HTML that WOULD be sent on a status change,
+        for display in the UI. Never triggers an actual send.
+      parameters:
+        - name: return_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rendered email preview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPreviewResponse"
+
+  /demo/set-irs-mode:
+    post:
+      summary: "[Demo control only] Set the mock IRS service's behavior mode"
+      description: >
+        Not part of the production API surface — exists solely to drive the
+        five/six demo scenarios live. Must be clearly separated from the
+        real API routes in the implementation (e.g., a distinct router
+        prefix), so it's obvious this is demo scaffolding, not part of the
+        contract a real client would call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum: [NORMAL, FAILING, FLAPPING, SLOW, TIMEOUT, MALFORMED_RESPONSE, UNKNOWN_STATUS_CODE, RATE_LIMITED]
+                  description: >
+                    See /docs/spec/02_TECHNICAL_DESIGN.md §2 for what each
+                    mode simulates and which design decision it demonstrates.
+              required: [mode]
+      responses:
+        "200":
+          description: Mode set
+
+  /help/ask:
+    post:
+      summary: Ask the Tax Help Assistant an open-ended tax question
+      description: >
+        Separate, additional feature from the refund-status core (see
+        /docs/spec/01_SPEC.md FR-7). RAG pipeline over a small seeded FAQ
+        corpus. Degrades gracefully to a "temporarily unavailable" response
+        if the LLM call fails or times out -- never a broken page.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  example: "What is form 1040-X?"
+      responses:
+        "200":
+          description: Answer (or graceful unavailable state)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HelpAskResponse"
+
+components:
+  schemas:
+    RefundStatusResponse:
+      type: object
+      required:
+        - return_id
+        - tax_year
+        - status_code
+        - filing_status
+        - stale
+        - last_checked
+      properties:
+        return_id:
+          type: string
+        tax_year:
+          type: integer
+        status_code:
+          type: string
+          enum: [RECEIVED, APPROVED, SENT, NO_REFUND_PENDING]
+        filing_status:
+          type: string
+          example: "married_filing_jointly"
+        expected_refund_amount:
+          type: number
+          nullable: true
+        predicted_window:
+          type: object
+          nullable: true
+          description: Null if status_code is SENT or NO_REFUND_PENDING
+          properties:
+            start_date:
+              type: string
+              format: date
+            end_date:
+              type: string
+              format: date
+            confidence_level:
+              type: number
+        explanation:
+          type: string
+          nullable: true
+          description: >
+            Only populated when a delay reason is inferable (see
+            /docs/spec/01_SPEC.md §3.3). Otherwise null or "still processing" —
+            never a fabricated reason.
+        stale:
+          type: boolean
+          description: True if this response was served from cache during an IRS circuit-breaker open state
+        last_checked:
+          type: string
+          format: date-time
+          description: Corresponds to last_validated_at — always present, even when stale is true
+
+    NotificationOptInRequest:
+      type: object
+      required: [return_id, channel]
+      properties:
+        return_id:
+          type: string
+        channel:
+          type: string
+          enum: [email, push]
+
+    NotificationOptInResponse:
+      type: object
+      properties:
+        return_id:
+          type: string
+        opted_in:
+          type: boolean
+
+    NotificationPreviewResponse:
+      type: object
+      properties:
+        return_id:
+          type: string
+        rendered_html:
+          type: string
+        note:
+          type: string
+          example: "Preview only — no live send in this PoC. See DECISIONS.md."
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        detail:
+          type: string
+
+    HelpAskResponse:
+      type: object
+      required: [answered, question]
+      properties:
+        question:
+          type: string
+        answered:
+          type: boolean
+          description: False if the assistant degraded gracefully (LLM call failed, timed out, or confidence was below threshold)
+        answer:
+          type: string
+          nullable: true
+        sources:
+          type: array
+          items:
+            type: string
+          description: Titles/IDs of the FAQ corpus documents the answer was grounded in
+        confidence:
+          type: number
+          nullable: true
+        fallback_message:
+          type: string
+          nullable: true
+          description: Populated only when answered is false -- a calm, honest "can't confidently answer" message, never a raw error
