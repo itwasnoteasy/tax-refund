@@ -139,6 +139,24 @@ def store_data(
     kv.set(_fresh_key(return_id, tax_year), "1", ttl_seconds=ttl)
 
 
+def clear_cache(return_id: str, tax_year: int) -> None:
+    """Clear both the durable value and the freshness marker for a return.
+
+    Forces the next lookup to be a genuine cache miss (an IRS refresh
+    attempt), regardless of how much of the TTL window remains. Used by
+    the demo control panel's "force cache miss" action
+    (03_API_CONTRACT.yaml has no such endpoint -- this is demo
+    scaffolding, matching /demo/set-irs-mode's own scope).
+
+    Args:
+        return_id: The return's unique identifier.
+        tax_year: The tax year to clear.
+    """
+    kv = KVStore()
+    kv.delete(_data_key(return_id, tax_year))
+    kv.delete(_fresh_key(return_id, tax_year))
+
+
 def _data_key(return_id: str, tax_year: int) -> str:
     return f"{_DATA_KEY_PREFIX}:{return_id}:{tax_year}"
 

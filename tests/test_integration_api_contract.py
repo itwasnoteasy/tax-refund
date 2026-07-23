@@ -142,6 +142,33 @@ def test_demo_set_irs_mode_matches_contracts_declared_status_only(
     assert "content" not in declared_responses["200"]
 
 
+def test_demo_circuit_breaker_status_endpoint(client) -> None:
+    """Not in 03_API_CONTRACT.yaml -- added for the frontend's breaker
+    indicator (see this task's chat reply). Basic shape check only.
+    """
+    response = client.get("/demo/circuit-breaker-status")
+    assert response.status_code == 200
+    assert response.json()["state"] in ("CLOSED", "OPEN", "HALF_OPEN")
+
+
+def test_demo_clear_cache_endpoint_forces_next_lookup_to_be_a_miss(client) -> None:
+    client.get("/refund-status/RET-2025-00001", params={"tax_year": 2025})  # warm it
+
+    response = client.post(
+        "/demo/clear-cache", json={"return_id": "RET-2025-00001", "tax_year": 2025}
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "return_id": "RET-2025-00001",
+        "tax_year": 2025,
+        "cleared": True,
+    }
+
+    from app import cache_layer
+
+    assert cache_layer.get_fresh_cached_data("RET-2025-00001", 2025) is None
+
+
 def test_docs_and_openapi_json_are_reachable(client) -> None:
     """The closest local proxy available for "does /docs work" without
     an actual Vercel deployment: runs the exact same ASGI app object

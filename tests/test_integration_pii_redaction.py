@@ -94,14 +94,26 @@ def test_full_refund_status_lookup_produces_no_pii_in_log_output(
     storage.py's _seed()).
     """
     with caplog.at_level(logging.INFO):
-        for return_id in ("RET-2025-00001", "RET-2025-00002", "RET-2025-00003"):
+        for return_id in (
+            "RET-2025-00001",
+            "RET-2025-00002",
+            "RET-2025-00003",
+            "RET-2025-00004",
+            "RET-2025-00005",
+        ):
             refund_status.get_refund_status_view(return_id, 2025)
 
     assert _SSN_PATTERN.search(caplog.text) is None
 
     all_seeded_returns = [
         storage.get_tax_return(return_id, 2025)
-        for return_id in ("RET-2025-00001", "RET-2025-00002", "RET-2025-00003")
+        for return_id in (
+            "RET-2025-00001",
+            "RET-2025-00002",
+            "RET-2025-00003",
+            "RET-2025-00004",
+            "RET-2025-00005",
+        )
     ]
     for tax_return in all_seeded_returns:
         assert tax_return.ssn not in caplog.text

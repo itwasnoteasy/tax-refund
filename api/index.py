@@ -26,7 +26,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app import mock_irs, notifications, refund_status, storage
+from app import cache_layer, irs_integration, mock_irs, notifications, refund_status, storage
 from app.help_assistant import graph as help_assistant_graph
 
 app = FastAPI(
@@ -101,6 +101,15 @@ class SetIRSModeRequestModel(BaseModel):
         "UNKNOWN_STATUS_CODE",
         "RATE_LIMITED",
     ]
+
+
+class ClearCacheRequestModel(BaseModel):
+    return_id: str
+    tax_year: int
+
+
+class CircuitBreakerStatusModel(BaseModel):
+    state: Literal["CLOSED", "OPEN", "HALF_OPEN"]
 
 
 # --- HTTP-layer-specific errors (not domain concepts -- these exist to
@@ -282,6 +291,32 @@ def set_irs_mode(payload: SetIRSModeRequestModel) -> dict:
     """
     mock_irs.set_mode(mock_irs.IRSMode(payload.mode))
     return {"mode": payload.mode}
+
+
+@demo_router.get(
+    "/circuit-breaker-status", response_model=CircuitBreakerStatusModel
+)
+def get_circuit_breaker_status() -> CircuitBreakerStatusModel:
+    """[Demo control only] Read the IRS circuit breaker's current state.
+
+    Not in 03_API_CONTRACT.yaml -- added so the demo UI can surface
+    CLOSED/OPEN/HALF_OPEN directly rather than only letting a viewer
+    infer it from response behavior (stale flags, latency). One global
+    breaker, not per-return -- see irs_integration.py.
+    """
+    return CircuitBreakerStatusModel(state=irs_integration.CircuitBreaker().state.value)
+
+
+@demo_router.post("/clear-cache")
+def clear_cache(payload: ClearCacheRequestModel) -> dict:
+    """[Demo control only] Force the next lookup for a return to be a
+    genuine cache miss, regardless of remaining TTL.
+
+    Not in 03_API_CONTRACT.yaml -- backs the demo control panel's
+    "force cache miss" action (05_ACCEPTANCE_CRITERIA.md's scenario 2).
+    """
+    cache_layer.clear_cache(payload.return_id, payload.tax_year)
+    return {"return_id": payload.return_id, "tax_year": payload.tax_year, "cleared": True}
 
 
 app.include_router(refund_status_router)

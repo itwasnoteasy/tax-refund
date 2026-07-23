@@ -122,8 +122,14 @@ def test_get_audit_log_returns_defensive_copy() -> None:
     assert len(storage.get_audit_log()) == 1
 
 
-def test_seed_data_covers_all_three_seed_returns() -> None:
-    for return_id in ("RET-2025-00001", "RET-2025-00002", "RET-2025-00003"):
+def test_seed_data_covers_all_five_seed_returns() -> None:
+    for return_id in (
+        "RET-2025-00001",
+        "RET-2025-00002",
+        "RET-2025-00003",
+        "RET-2025-00004",
+        "RET-2025-00005",
+    ):
         assert storage.get_tax_return(return_id, 2025) is not None
         assert storage.get_refund_status(return_id, 2025) is not None
 
@@ -137,3 +143,23 @@ def test_balance_due_return_has_no_refund_pending_status_and_no_amount() -> None
     assert tax_return is not None and status is not None
     assert tax_return.expected_refund_amount is None
     assert status.status_code == storage.StatusCode.NO_REFUND_PENDING
+
+
+def test_paper_filed_return_is_received_with_paper_filing_method() -> None:
+    """Frontend addition: paper-filed returns get status_code=RECEIVED
+    (honestly true -- the IRS has logged it) with filing_method=PAPER,
+    which the UI uses to show "this takes weeks longer, expected" copy
+    rather than inventing a 5th status_code value outside
+    03_API_CONTRACT.yaml's fixed enum.
+    """
+    tax_return = storage.get_tax_return("RET-2025-00004", 2025)
+    status = storage.get_refund_status("RET-2025-00004", 2025)
+    assert tax_return is not None and status is not None
+    assert tax_return.filing_method == storage.FilingMethod.PAPER
+    assert status.status_code == storage.StatusCode.RECEIVED
+
+
+def test_sent_return_is_terminal() -> None:
+    status = storage.get_refund_status("RET-2025-00005", 2025)
+    assert status is not None
+    assert status.status_code == storage.StatusCode.SENT

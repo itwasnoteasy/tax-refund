@@ -134,6 +134,14 @@ class _LocalBackend:
         # "0" -- truncating would make a still-valid key look expired.
         return math.ceil(remaining)
 
+    def delete(self, key: str) -> None:
+        """Remove a key, if present.
+
+        Args:
+            key: The key to remove.
+        """
+        self._data.pop(key, None)
+
 
 class _UpstashBackend:
     """Real Vercel KV backend, via the Upstash Redis REST client.
@@ -197,6 +205,14 @@ class _UpstashBackend:
             return None
         return int(remaining)
 
+    def delete(self, key: str) -> None:
+        """Remove a key from Vercel KV, if present.
+
+        Args:
+            key: The key to remove.
+        """
+        self._client.delete(key)
+
 
 class KVStore:
     """Redis-shaped get/set/ttl interface, backed by Vercel KV.
@@ -254,6 +270,14 @@ class KVStore:
             has already expired, or was set with no TTL.
         """
         return self._backend.ttl(key)
+
+    def delete(self, key: str) -> None:
+        """Remove a key, if present.
+
+        Args:
+            key: The key to remove.
+        """
+        self._backend.delete(key)
 
 
 def reset_local_backend() -> None:

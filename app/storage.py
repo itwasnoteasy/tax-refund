@@ -344,18 +344,18 @@ def reset_seed_data() -> None:
 
 
 def _seed() -> None:
-    """Populate the three seed returns covering all six
-    05_ACCEPTANCE_CRITERIA.md demo scenarios.
+    """Populate the seed returns covering all six 05_ACCEPTANCE_CRITERIA.md
+    demo scenarios, plus two additional ones from DEMO_WALKTHROUGH_SCRIPT.md's
+    narration (paper-filed, SENT) added for the frontend build -- see
+    DECISIONS.md.
 
-    Three distinct returns are enough: rows 1, 2, 3, and 5 all exercise
-    the same normal, unflagged return -- cache hit/miss and IRS-failure
-    behavior are properties of the demo control panel and cache state,
-    not of the seed data itself, and "still processing" is this
-    return's correct, non-fabricated explanation. Row 4 needs the
-    EITC/CTC-flagged return; row 6 needs the balance-due return. See
-    DECISIONS.md for the full mapping and why a "SENT" terminal-state
-    return and a paper-filed return (present in the demo walkthrough's
-    narration but not in the 6-row acceptance table) aren't seeded here.
+    Three of the five returns are enough for the six-row acceptance
+    table: rows 1, 2, 3, and 5 all exercise the same normal, unflagged
+    return -- cache hit/miss and IRS-failure behavior are properties of
+    the demo control panel and cache state, not of the seed data
+    itself, and "still processing" is this return's correct,
+    non-fabricated explanation. Row 4 needs the EITC/CTC-flagged
+    return; row 6 needs the balance-due return.
     """
     normal_return = TaxReturn(
         return_id="RET-2025-00001",
@@ -387,8 +387,42 @@ def _seed() -> None:
         ssn="345-67-8901",
         bank_account_number=None,
     )
+    # DECISION: paper-filed, status_code=RECEIVED rather than a new
+    # status value. 03_API_CONTRACT.yaml's status_code enum is fixed at
+    # [RECEIVED, APPROVED, SENT, NO_REFUND_PENDING] -- adding a 5th
+    # "no status yet" value would be a real contract deviation. RECEIVED
+    # is honestly true here (the IRS has logged the paper return), and
+    # the UI surfaces the "paper takes weeks longer, this is expected"
+    # framing based on filing_method rather than a distinct backend
+    # status. See DECISIONS.md.
+    paper_filed_return = TaxReturn(
+        return_id="RET-2025-00004",
+        tax_year=2025,
+        filing_status="single",
+        filing_method=FilingMethod.PAPER,
+        expected_refund_amount=1120.00,
+        has_eitc_ctc_flag=False,
+        ssn="456-78-9012",
+        bank_account_number=None,
+    )
+    sent_return = TaxReturn(
+        return_id="RET-2025-00005",
+        tax_year=2025,
+        filing_status="single",
+        filing_method=FilingMethod.EFILE_CURRENT_YEAR,
+        expected_refund_amount=2765.00,
+        has_eitc_ctc_flag=False,
+        ssn="567-89-0123",
+        bank_account_number="000567890123",
+    )
 
-    for tax_return in (normal_return, eitc_ctc_return, balance_due_return):
+    for tax_return in (
+        normal_return,
+        eitc_ctc_return,
+        balance_due_return,
+        paper_filed_return,
+        sent_return,
+    ):
         _TAX_RETURNS[(tax_return.return_id, tax_return.tax_year)] = tax_return
 
     upsert_refund_status(
@@ -413,6 +447,22 @@ def _seed() -> None:
             tax_year=balance_due_return.tax_year,
             status_code=StatusCode.NO_REFUND_PENDING,
             status_last_updated_at=datetime(2026, 7, 18, 10, 0, 0),
+        )
+    )
+    upsert_refund_status(
+        RefundStatus(
+            return_id=paper_filed_return.return_id,
+            tax_year=paper_filed_return.tax_year,
+            status_code=StatusCode.RECEIVED,
+            status_last_updated_at=datetime(2026, 6, 30, 8, 0, 0),
+        )
+    )
+    upsert_refund_status(
+        RefundStatus(
+            return_id=sent_return.return_id,
+            tax_year=sent_return.tax_year,
+            status_code=StatusCode.SENT,
+            status_last_updated_at=datetime(2026, 7, 15, 11, 0, 0),
         )
     )
 

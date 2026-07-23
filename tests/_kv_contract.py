@@ -40,3 +40,9 @@ def assert_kv_contract(store: KVStore) -> None:
     time.sleep(1.2)
     assert store.get(ttl_key) is None
     assert store.ttl(ttl_key) is None
+
+    delete_key = f"test-delete-{time.monotonic_ns()}"
+    store.set(delete_key, "will be removed")
+    store.delete(delete_key)
+    assert store.get(delete_key) is None
+    store.delete(delete_key)  # deleting an already-missing key is a no-op, not an error
