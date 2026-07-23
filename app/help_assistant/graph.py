@@ -55,6 +55,20 @@ GUARDRAIL_OR_ERROR_FALLBACK_MESSAGE = (
     "shortly."
 )
 
+# DECISION: model name read from an env var, not hardcoded -- same
+# reasoning as retrieval.py's _gemini_model()/_gemini_embedding_model():
+# unverified against the live API from this environment, so a wrong
+# guess should be correctable via a Vercel env var, not a code change.
+_DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+
+
+def _gemini_model() -> str:
+    """The Gemini model used for synthesis/guardrail calls.
+
+    Override via the GEMINI_MODEL env var.
+    """
+    return os.environ.get("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
+
 
 @dataclass(frozen=True)
 class GuardrailResult:
@@ -94,11 +108,6 @@ class _GeminiSynthesizer:
     beyond it. Not exercised against the live API from this
     environment -- see this module's docstring.
     """
-
-    _ENDPOINT = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-flash-latest:generateContent"
-    )
 
     _PROMPT = PromptTemplate.from_template(
         "Answer the user's tax question using ONLY the context below. "
@@ -145,8 +154,12 @@ class _GeminiSynthesizer:
         prompt = self._PROMPT.format(
             context=context_text, question=question, retry_note=retry_note
         )
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{_gemini_model()}:generateContent"
+        )
         response = httpx.post(
-            self._ENDPOINT,
+            endpoint,
             params={"key": self._api_key},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=10.0,
@@ -214,11 +227,6 @@ class _GeminiGuardrail:
     # See DECISIONS.md.
     """
 
-    _ENDPOINT = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-flash-latest:generateContent"
-    )
-
     _PROMPT = PromptTemplate.from_template(
         "You are checking for contradiction, not general quality. "
         "Premise (retrieved context): {context}\n\n"
@@ -245,8 +253,12 @@ class _GeminiGuardrail:
             httpx.HTTPError: The request failed, errored, or timed out.
         """
         prompt = self._PROMPT.format(context=context, answer=answer)
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{_gemini_model()}:generateContent"
+        )
         response = httpx.post(
-            self._ENDPOINT,
+            endpoint,
             params={"key": self._api_key},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=10.0,

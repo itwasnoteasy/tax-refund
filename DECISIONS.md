@@ -192,4 +192,8 @@ Format per entry:
 **Why:** The task's phrasing -- "retry once on guardrail failure ... graceful degradation ... if the retry also fails or the LLM call itself errors/times out" -- reads as two parallel failure classes reaching the same degrade outcome, not one retry policy covering both. A guardrail rejection has a *received* answer to retry with feedback about; a raw synthesis error (network failure, timeout) has no answer to give feedback on, so there's nothing meaningful to retry -- it degrades directly.
 **Honest gap:** This is my reading of slightly ambiguous phrasing, not an unambiguous spec statement -- flagging it here rather than treating it as obviously settled. A reasonable alternative reading (retry once on *any* failure, guardrail or connection) would be a small, easy change to `synthesize_node`'s exception handling if that's actually the intended behavior.
 
+### retrieval.py/graph.py: Gemini model names read from GEMINI_MODEL/GEMINI_EMBEDDING_MODEL env vars, not hardcoded
+**Why:** Both model identifiers (`gemini-flash-latest` for synthesis/rerank/guardrail, `text-embedding-004` for embeddings) were written from training knowledge and explicitly flagged as unverified against the live API. Reading them from env vars (falling back to those same defaults) means a wrong guess is correctable via a Vercel env var and redeploy, not a code change -- directly requested once the app was actually deployed and a real model name needed adjusting.
+**Honest gap:** None -- straightforward configurability improvement, defaults unchanged from what was already there.
+
 *(New entries go below this line as the build progresses.)*

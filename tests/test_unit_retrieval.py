@@ -188,3 +188,26 @@ def test_local_hash_embedding_client_is_selected_with_no_credentials() -> None:
     assert isinstance(
         retrieval.get_default_embedding_client(), retrieval._LocalHashEmbeddingClient
     )
+
+
+def test_gemini_model_defaults_and_is_overridable_via_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wrong model-name guess should be correctable via a Vercel env
+    var, not a code change -- confirms the override actually works.
+    """
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    assert retrieval._gemini_model() == "gemini-flash-latest"
+
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    assert retrieval._gemini_model() == "gemini-2.5-flash"
+
+
+def test_gemini_embedding_model_defaults_and_is_overridable_via_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_EMBEDDING_MODEL", raising=False)
+    assert retrieval._gemini_embedding_model() == "text-embedding-004"
+
+    monkeypatch.setenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
+    assert retrieval._gemini_embedding_model() == "gemini-embedding-001"

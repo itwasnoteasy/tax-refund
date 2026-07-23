@@ -55,6 +55,29 @@ CONFIDENCE_FLOOR = 0.5
 _EMBEDDING_API_KEY_ENV_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
 _LOCAL_EMBEDDING_DIMENSIONS = 512
 
+# DECISION: model names are read from env vars, not hardcoded, since
+# neither has been verified against the live API from this environment
+# (see DECISIONS.md) -- overriding via Vercel env vars lets a wrong
+# guess be corrected without a code change/redeploy cycle.
+_DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+_DEFAULT_GEMINI_EMBEDDING_MODEL = "text-embedding-004"
+
+
+def _gemini_model() -> str:
+    """The Gemini model used for reranking/synthesis/guardrail calls.
+
+    Override via the GEMINI_MODEL env var.
+    """
+    return os.environ.get("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
+
+
+def _gemini_embedding_model() -> str:
+    """The Gemini model used for dense-retrieval embeddings.
+
+    Override via the GEMINI_EMBEDDING_MODEL env var.
+    """
+    return os.environ.get("GEMINI_EMBEDDING_MODEL", _DEFAULT_GEMINI_EMBEDDING_MODEL)
+
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
 
@@ -107,11 +130,6 @@ class _HostedEmbeddingClient:
     # See DECISIONS.md.
     """
 
-    _ENDPOINT = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "text-embedding-004:embedContent"
-    )
-
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
 
@@ -126,8 +144,12 @@ class _HostedEmbeddingClient:
         """
         import httpx
 
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{_gemini_embedding_model()}:embedContent"
+        )
         response = httpx.post(
-            self._ENDPOINT,
+            endpoint,
             params={"key": self._api_key},
             json={"content": {"parts": [{"text": text}]}},
             timeout=10.0,
@@ -339,11 +361,6 @@ class _LLMReranker:
     # live API from this environment. See DECISIONS.md.
     """
 
-    _ENDPOINT = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-flash-latest:generateContent"
-    )
-
     def __init__(self, api_key: str) -> None:
         self._api_key = api_key
 
@@ -363,8 +380,12 @@ class _LLMReranker:
             f'Respond with only a JSON array of numbers, in order.\n\nQuestion: "{query}"\n\n'
             f"{candidate_texts}"
         )
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{_gemini_model()}:generateContent"
+        )
         response = httpx.post(
-            self._ENDPOINT,
+            endpoint,
             params={"key": self._api_key},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=10.0,
