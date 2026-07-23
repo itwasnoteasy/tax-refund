@@ -148,9 +148,13 @@ class _HostedEmbeddingClient:
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{_gemini_embedding_model()}:embedContent"
         )
+        # DECISION: API key in the x-goog-api-key header, not the
+        # ?key= query param -- confirmed live that newer-format ("AQ.")
+        # Google API keys are rejected via the query param but accepted
+        # via this header. See DECISIONS.md.
         response = httpx.post(
             endpoint,
-            params={"key": self._api_key},
+            headers={"x-goog-api-key": self._api_key},
             json={"content": {"parts": [{"text": text}]}},
             timeout=10.0,
         )
@@ -384,9 +388,11 @@ class _LLMReranker:
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{_gemini_model()}:generateContent"
         )
+        # DECISION: see the matching comment in _HostedEmbeddingClient.embed()
+        # -- x-goog-api-key header, not ?key= query param.
         response = httpx.post(
             endpoint,
-            params={"key": self._api_key},
+            headers={"x-goog-api-key": self._api_key},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=10.0,
         )

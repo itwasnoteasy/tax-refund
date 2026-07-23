@@ -180,9 +180,13 @@ class _GeminiSynthesizer:
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{_gemini_model()}:generateContent"
         )
+        # DECISION: API key in the x-goog-api-key header, not the
+        # ?key= query param -- confirmed live that newer-format ("AQ.")
+        # Google API keys are rejected via the query param but accepted
+        # via this header. See DECISIONS.md.
         response = httpx.post(
             endpoint,
-            params={"key": self._api_key},
+            headers={"x-goog-api-key": self._api_key},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=10.0,
         )
@@ -279,9 +283,11 @@ class _GeminiGuardrail:
             "https://generativelanguage.googleapis.com/v1beta/models/"
             f"{_gemini_model()}:generateContent"
         )
+        # DECISION: see the matching comment in _GeminiSynthesizer.synthesize()
+        # -- x-goog-api-key header, not ?key= query param.
         response = httpx.post(
             endpoint,
-            params={"key": self._api_key},
+            headers={"x-goog-api-key": self._api_key},
             json={"contents": [{"parts": [{"text": prompt}]}]},
             timeout=10.0,
         )
