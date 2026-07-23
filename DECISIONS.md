@@ -48,4 +48,8 @@ Format per entry:
 **Why:** Avoids Vercel cold-start risk entirely for the retrieval step.
 **Honest gap:** A self-hosted embedding model might be preferred in a non-serverless production deployment for cost/latency/data-residency reasons — this is an infrastructure-driven choice, not a universal one.
 
+### Vercel KV client: `upstash-redis`, not the plain `redis` TCP client
+**Why:** Vercel KV is Upstash Redis under the hood and exposes REST-based credentials (`KV_REST_API_URL` / `KV_REST_API_TOKEN`), not a raw TCP connection string. A REST-based client fits a serverless function's short-lived, per-invocation lifecycle better than a client that expects a persistent TCP connection to manage.
+**Honest gap:** None specific to the PoC — this is the client Vercel's own docs point to for Python; no request-level logic (get/set/ttl) has been written yet, only the dependency choice.
+
 *(New entries go below this line as the build progresses.)*
