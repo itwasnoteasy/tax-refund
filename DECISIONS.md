@@ -124,4 +124,28 @@ Format per entry:
 **Why:** `03_API_CONTRACT.yaml`'s `/notifications/opt-in` and `/notifications/preview/{return_id}` both take only `return_id` -- no `tax_year`, unlike `/refund-status`. Since storage.py is keyed by `(return_id, tax_year)` per FR-1's "year must be explicit" rule, notifications.py needs a different lookup, added as `find_tax_return_by_id()`.
 **Honest gap:** This is safe only because every seeded return_id happens to be unique across tax years in this PoC. A return_id reused across multiple tax years would make the notification contract genuinely ambiguous (which year's return gets opted in?) -- a gap inherited from how `03_API_CONTRACT.yaml` itself is written, not something invented here. Not escalated as a formal Open Question since it doesn't block correctness for this PoC's data and has a documented, reasonable resolution -- worth revisiting if real multi-year return_id reuse is ever a possibility.
 
+### api/index.py: hand-written Pydantic models mirroring 03_API_CONTRACT.yaml, not generated from it or from this app's own dataclasses
+**Why:** If the request/response models were derived from `refund_status.RefundStatusView` and friends (this app's internal shape), a change to those internal dataclasses could silently drift the API's actual JSON shape away from the contract with nothing catching it. Hand-writing the Pydantic models to match `03_API_CONTRACT.yaml` field-for-field, then separately validating live responses against the contract itself in `test_integration_api_contract.py`, keeps the contract as the one authority both the app and the test are checked against independently.
+**Honest gap:** This means two places (the Pydantic models and the YAML contract) have to be kept in sync by hand if the contract ever changes -- the contract test is exactly what catches that drift, but it's a test-time safety net, not a compile-time guarantee.
+
+### api/index.py: "3 most recent tax years" computed as (this year - 1, -2, -3)
+**Why:** Neither `01_SPEC.md` nor `03_API_CONTRACT.yaml` gives an exact formula for FR-1's "3 most recent tax years" -- a filer checks on a return for a year that's already ended, so "most recent" is read as the most recently completed tax year and the two before it, relative to today's date.
+**Honest gap:** An inferred formula, not a specified one -- worth confirming against whatever the actual presentation slides say if this becomes a question worth defending precisely.
+
+### api/index.py: RefundDataUnavailableError maps to HTTP 503, not declared in 03_API_CONTRACT.yaml
+**Why:** The contract only declares 200/404/400 for `GET /refund-status/{return_id}` -- it has no response for "the IRS is unreachable and nothing has ever been cached for this return either." 503 (Service Unavailable) reflects that this is the *system* temporarily unable to answer, not a client error (400) or a genuinely nonexistent resource (404). In practice this should be very rare against the seeded demo data, since the normal flow always successfully caches a return before any failure mode is ever demoed against it.
+**Honest gap:** Not in the contract at all -- a real API governance process would get this added to `03_API_CONTRACT.yaml` explicitly rather than leaving it to an implementation detail. Noted here rather than silently improvised, per CLAUDE.md's spec-drift spirit, though not escalated as a formal Open Question since it's a narrow, low-probability edge case with an obviously reasonable resolution.
+
+### tests/_contract.py: jsonschema + PyYAML added to requirements-dev.txt only, not requirements.txt
+**Why:** Both are needed only to load and validate against `03_API_CONTRACT.yaml` in `test_integration_api_contract.py` -- no production code path parses YAML or does JSON Schema validation. Keeping them dev-only matches the earlier decision to keep `pytest` out of the production `requirements.txt`.
+**Honest gap:** None.
+
+### tests/_contract.py: jsonschema's (deprecated) RefResolver, not the newer `referencing` library
+**Why:** `RefResolver` still works correctly for resolving this contract's internal `$ref`s (confirmed directly before writing the test) and is dramatically simpler to wire up than the `referencing` library's `Registry`/`Resource` API, which needs the schema's own base URI and the reference's resolution scope to line up precisely. This is test-only tooling, not production code, so the simpler, if deprecated, API is the pragmatic choice; the deprecation warning is suppressed locally around the one place it's used.
+**Honest gap:** `RefResolver` is slated for eventual removal from jsonschema -- if a future jsonschema upgrade drops it, this helper needs a small rewrite against `referencing` directly.
+
+### /docs on Vercel: confirmed via FastAPI's TestClient against the real ASGI app, not a live deployment
+**Why:** This session's work has only been pushed to the `claude/repo-permission-test-o9tdfc` branch -- `main` (what Vercel actually deploys) still has the original scaffold with zero routes, so there is currently nothing new to check against the live URL regardless. `test_docs_and_openapi_json_are_reachable` runs the exact same `app` object Vercel's Python runtime would invoke, which is the strongest verification available without a deploy; a true on-Vercel check requires this branch (or `main`) to actually be deployed first.
+**Honest gap:** TestClient can't catch anything genuinely specific to Vercel's serverless execution environment (cold starts, the platform's own request routing quirks) -- only a real deployment can fully confirm those. Flagged explicitly in this task's chat reply rather than assumed away.
+
 *(New entries go below this line as the build progresses.)*
