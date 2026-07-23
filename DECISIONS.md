@@ -52,4 +52,8 @@ Format per entry:
 **Why:** Vercel KV is Upstash Redis under the hood and exposes REST-based credentials (`KV_REST_API_URL` / `KV_REST_API_TOKEN`), not a raw TCP connection string. A REST-based client fits a serverless function's short-lived, per-invocation lifecycle better than a client that expects a persistent TCP connection to manage.
 **Honest gap:** None specific to the PoC — this is the client Vercel's own docs point to for Python; no request-level logic (get/set/ttl) has been written yet, only the dependency choice.
 
+### kv_store.py: auto-detect local fallback via missing env vars, not a config flag
+**Why:** `KVStore` picks the in-memory backend automatically whenever `KV_REST_API_URL`/`KV_REST_API_TOKEN` (or `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN`) aren't set, rather than requiring an explicit `KV_BACKEND=local` setting. This means zero-config local iteration (`import app.kv_store` just works), and there's no separate flag that could drift out of sync with whether credentials are actually present.
+**Honest gap:** The local backend has no cross-invocation persistence — it's a single-process dict, gone the moment the process exits. That's fine for local dev (no serverless boundary to cross) but would be silently wrong if it were ever selected on Vercel itself; it's only reachable there if the KV env vars are missing, which would itself be a deployment misconfiguration worth surfacing loudly, not something this module tries to detect or alert on.
+
 *(New entries go below this line as the build progresses.)*
