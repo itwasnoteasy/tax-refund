@@ -73,6 +73,25 @@ def _gemini_model() -> str:
     return os.environ.get("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
 
 
+def _describe_httpx_error(exc: httpx.HTTPError) -> str:
+    """Render an httpx error with enough detail to actually diagnose it.
+
+    # DECISION: str(exc) alone, for httpx.HTTPStatusError, is just
+    # "Client error '404 Not Found' for url ...' -- it does NOT include
+    # the response body, which is exactly where Google's API puts the
+    # actual reason (e.g. "model not found", "API key not valid").
+    # Every degrade path in this graph shows the same calm message to
+    # the user by design, so this detail is only ever visible here, in
+    # the log line -- see DECISIONS.md.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return (
+            f"{exc.response.status_code} {exc.response.reason_phrase}: "
+            f"{exc.response.text[:500]}"
+        )
+    return f"{type(exc).__name__}: {exc}"
+
+
 @dataclass(frozen=True)
 class GuardrailResult:
     """The outcome of one NLI-style contradiction check."""
@@ -371,7 +390,7 @@ def _build_graph(synthesizer, guardrail, reranker):
             # wrong model name, bad API key, quota -- is visible in
             # Vercel's function logs even though the user only sees a
             # calm fallback message.
-            logger.warning("Retrieval call failed: %s", exc)
+            logger.warning("Retrieval call failed: %s", _describe_httpx_error(exc))
             return {"retrieval_outcome": None, "retrieval_failed": True}
         return {"retrieval_outcome": outcome, "retrieval_failed": False}
 
@@ -380,6 +399,10 @@ def _build_graph(synthesizer, guardrail, reranker):
             return "degrade_guardrail_or_error"
         if state["retrieval_outcome"].confident:
             return "synthesize"
+        logger.info(
+            "Confidence gate tripped for question %r -- top score below floor.",
+            state["question"],
+        )
         return "degrade_low_confidence"
 
     def synthesize_node(state: _State) -> dict:
@@ -399,7 +422,7 @@ def _build_graph(synthesizer, guardrail, reranker):
             # rejection of a *received* answer, not a connectivity
             # failure that produced no answer at all). Logged for the
             # same reason as the retrieval failure above.
-            logger.warning("Synthesis call failed: %s", exc)
+            logger.warning("Synthesis call failed: %s", _describe_httpx_error(exc))
             return {"answer": None, "synthesis_failed": True}
         return {"answer": answer, "synthesis_failed": False}
 
@@ -424,11 +447,21 @@ def _build_graph(synthesizer, guardrail, reranker):
             # new branch, since "couldn't verify" and "verified and
             # rejected" both mean "don't show this yet." Logged for the
             # same reason as the retrieval/synthesis failures above.
-            logger.warning("Guardrail check failed: %s", exc)
+            logger.warning("Guardrail check failed: %s", _describe_httpx_error(exc))
             return {
                 "guardrail_passed": False,
                 "guardrail_reason": "Guardrail check itself failed; treating as unverified.",
             }
+        if not result.passed:
+            # Not an error -- the guardrail ran fine and genuinely
+            # rejected the answer. Logged distinctly from the exception
+            # cases above so Vercel's logs can tell "the call failed"
+            # apart from "it ran and said no."
+            logger.info(
+                "Guardrail rejected answer (retry_count=%s): %s",
+                state["retry_count"],
+                result.reason,
+            )
         return {"guardrail_passed": result.passed, "guardrail_reason": result.reason}
 
     def route_after_guardrail(state: _State) -> str:

@@ -204,4 +204,8 @@ Format per entry:
 **Why:** All three failure paths degrade to the same calm user-facing message by design -- but that means the *real* cause (wrong model name vs. bad key vs. genuine timeout) would otherwise be invisible from outside the process. Added `logger.warning(...)` at each catch site so Vercel's function logs show the actual httpx error even though the HTTP response stays gracefully degraded -- the intended way to diagnose a live failure without needing to reach the deployment directly.
 **Honest gap:** None -- purely additive observability, no behavior change.
 
+### graph.py: log lines carry the actual response body, and non-error degrades are logged too
+**Why:** `str(exc)` on an `httpx.HTTPStatusError` is just `"Client error '404 Not Found' for url ...'"` -- it omits the response body, which is exactly where Google's API puts the actionable detail (e.g. `"models/gemini-2.5-flash is not found for API version v1beta"`). Confirmed as a real gap live: the first deployed failure's log line named the status code but not the reason, and the actual cause only became clear once diagnosed by re-reading the raw error the user pasted from the client response. `_describe_httpx_error()` now includes `response.text` for status errors. Also added `logger.info(...)` for the two *non-exception* degrade paths (confidence gate tripped, guardrail genuinely rejected an answer) so Vercel's logs can distinguish "the call failed" from "it ran and said no" -- previously only the exception paths logged anything at all.
+**Honest gap:** None -- purely additive observability, prompted directly by a real live failure rather than anticipated in advance.
+
 *(New entries go below this line as the build progresses.)*
