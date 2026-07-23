@@ -143,12 +143,23 @@ def _build_cached_data(
         predicted_window = None
         explanation = None
     else:
-        predicted_window = refund_logic.predict_window(
-            status.status_code, tax_return.filing_method, date.today()
-        )
         explanation = refund_logic.explain_delay(
             {"has_eitc_ctc_flag": tax_return.has_eitc_ctc_flag}
         )
+        if tax_return.filing_method == storage.FilingMethod.PAPER:
+            # DECISION: no predicted_window for paper-filed returns,
+            # even though status is non-terminal. Real IRS paper
+            # processing gives no meaningful timeline at all for weeks
+            # (02_TECHNICAL_DESIGN.md §2's TTL table) -- showing a
+            # confident-looking date range here would contradict the
+            # honest "we don't have detail yet" framing this status
+            # deserves. Found while building the frontend: showing both
+            # together looked contradictory on screen. See DECISIONS.md.
+            predicted_window = None
+        else:
+            predicted_window = refund_logic.predict_window(
+                status.status_code, tax_return.filing_method, date.today()
+            )
 
     return cache_layer.CachedRefundData(
         status_code=status.status_code,

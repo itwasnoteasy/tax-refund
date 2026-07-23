@@ -4,6 +4,10 @@
 
 **Suggested order:** go roughly in the sequence below — it builds from "the system works" to "the system fails gracefully" to "the system does something genuinely AI-interesting," which is a natural narrative arc rather than a random tour of features.
 
+**The demo control panel:** the right-hand panel in the frontend is demo scaffolding, not part of the product surface (03_API_CONTRACT.yaml has no equivalent) — it's how you'll actually drive every failure mode below live, without a terminal or Postman in view. Two things worth calling out explicitly while presenting:
+- **The circuit breaker indicator is a real, live read of `irs_integration.py`'s state** (CLOSED/OPEN/HALF_OPEN), not a inferred guess from response shape — it polls immediately after every status check (not just on a timer), so it visibly flips to OPEN in the same moment a request trips the breaker. Worth pointing at directly during steps 9-11 rather than only describing the JSON.
+- **The "force cache miss" button clears only the freshness marker, not the durable last-known-good value** — deliberately, so it can be used right before demoing a failure mode without destroying the very fallback data that failure mode needs to show. (This was a real bug caught while rehearsing: the first version deleted both, which meant every rehearsed "miss then fail" ran into the no-fallback-exists edge case instead of the intended stale-cache moment.)
+
 ---
 
 ## Part 1 — Happy Path
@@ -14,8 +18,11 @@
 **2. Same return, requested again (cache warm)**
 > "Same return, second request. This one never touches the mock IRS at all — it's served straight from cache." *(point at response time)* "Sub-200ms, which was the actual latency target in the design. The TTL here is set based on filing method — this return is e-filed and current-year, so it gets roughly a 20-24 hour cache window, matching how often IRS itself actually updates."
 
-**3. A different filing method (paper-filed)**
-> "This return was paper-filed. Notice there's no status yet at all — and that's not an error state, that's expected. IRS doesn't have meaningful status for paper returns for weeks. A lot of designs would treat 'no data' as a failure; here it's a distinct, correctly-labeled state."
+**3. A different filing method (paper-filed, `RET-2025-00004`)**
+> "This return was paper-filed. Notice it's marked received, but there's deliberately no predicted delivery window — IRS doesn't give meaningful timeline detail for paper returns for weeks, so rather than show a confident-looking date range next to that honest gap, the window is suppressed entirely for paper filers. Showing both together looked contradictory the first time I actually put this on screen, which is exactly the kind of thing you only catch by looking at the real UI, not by reading the code."
+
+**3b. A completed, terminal return (`RET-2025-00005`, status: sent)**
+> "And this one's done — refund sent. Notice there's no predicted window and no explanation here either, but for the opposite reason: there's nothing left to predict or explain once a refund has actually shipped. Terminal states get their own clean, distinct display, not a leftover 'still processing' card that no longer makes sense."
 
 ---
 

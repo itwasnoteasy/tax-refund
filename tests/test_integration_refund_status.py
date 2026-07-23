@@ -182,6 +182,20 @@ def test_no_refund_pending_return_has_no_prediction_or_explanation() -> None:
     assert view.expected_refund_amount is None
 
 
+def test_paper_filed_return_has_no_predicted_window_but_has_explanation() -> None:
+    """Found while building the frontend: showing a confident-looking
+    date range next to "paper returns take weeks longer, no detail yet"
+    looked contradictory on screen. Real paper processing gives no
+    meaningful timeline at all -- explanation still applies normally
+    (this return has no EITC/CTC flag, so "still processing"), only
+    the window is suppressed.
+    """
+    view = refund_status.get_refund_status_view("RET-2025-00004", 2025)
+    assert view.status_code == storage.StatusCode.RECEIVED
+    assert view.predicted_window is None
+    assert view.explanation == "still processing"
+
+
 def test_eitc_ctc_return_gets_path_act_explanation() -> None:
     """Acceptance-criteria row 4."""
     view = refund_status.get_refund_status_view("RET-2025-00002", 2025)

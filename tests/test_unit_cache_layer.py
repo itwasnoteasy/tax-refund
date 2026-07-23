@@ -34,7 +34,12 @@ def _sample_data() -> cache_layer.CachedRefundData:
     )
 
 
-def test_clear_cache_removes_both_fresh_and_durable_data() -> None:
+def test_clear_cache_forces_a_miss_but_preserves_the_stale_fallback() -> None:
+    """clear_cache() must only invalidate freshness, not destroy the
+    durable last-known-good value -- otherwise "force cache miss" would
+    also wipe out exactly the data the circuit-breaker demo needs to
+    fall back on. See DECISIONS.md.
+    """
     cache_layer.store_data(
         _RETURN_ID, _TAX_YEAR, _sample_data(), storage.FilingMethod.EFILE_CURRENT_YEAR
     )
@@ -44,7 +49,7 @@ def test_clear_cache_removes_both_fresh_and_durable_data() -> None:
     cache_layer.clear_cache(_RETURN_ID, _TAX_YEAR)
 
     assert cache_layer.get_fresh_cached_data(_RETURN_ID, _TAX_YEAR) is None
-    assert cache_layer.get_last_known_data(_RETURN_ID, _TAX_YEAR) is None
+    assert cache_layer.get_last_known_data(_RETURN_ID, _TAX_YEAR) is not None
 
 
 def test_clear_cache_on_never_cached_return_is_a_no_op() -> None:
