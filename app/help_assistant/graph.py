@@ -25,6 +25,7 @@ exercised against a live API from this environment -- same caveat
 already recorded for retrieval.py's embedding/rerank calls and
 kv_store.py's real Upstash backend.
 """
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional, TypedDict
@@ -35,6 +36,8 @@ from langgraph.graph import END, StateGraph
 
 from app.help_assistant import retrieval
 from app.help_assistant.faq_corpus import FAQDocument
+
+logger = logging.getLogger("app.help_assistant.graph")
 
 _LLM_API_KEY_ENV_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
 
@@ -334,6 +337,7 @@ def get_default_guardrail():
 class _State(TypedDict):
     question: str
     retrieval_outcome: Optional[retrieval.RetrievalOutcome]
+    retrieval_failed: bool
     answer: Optional[str]
     synthesis_failed: bool
     guardrail_passed: Optional[bool]
@@ -354,10 +358,26 @@ def _build_graph(synthesizer, guardrail, reranker):
     """
 
     def retrieve_node(state: _State) -> dict:
-        outcome = retrieval.retrieve_and_rerank(state["question"], reranker=reranker)
-        return {"retrieval_outcome": outcome}
+        try:
+            outcome = retrieval.retrieve_and_rerank(
+                state["question"], reranker=reranker
+            )
+        except httpx.HTTPError as exc:
+            # FAILURE MODE: the hosted embedding or LLM-rerank call
+            # itself errored or timed out -- must degrade gracefully,
+            # same as a synthesis failure, never an unhandled 500
+            # (CLAUDE.md's resilience philosophy for this feature).
+            # Logged here (not swallowed silently) so a real cause --
+            # wrong model name, bad API key, quota -- is visible in
+            # Vercel's function logs even though the user only sees a
+            # calm fallback message.
+            logger.warning("Retrieval call failed: %s", exc)
+            return {"retrieval_outcome": None, "retrieval_failed": True}
+        return {"retrieval_outcome": outcome, "retrieval_failed": False}
 
     def route_after_retrieve(state: _State) -> str:
+        if state["retrieval_failed"]:
+            return "degrade_guardrail_or_error"
         if state["retrieval_outcome"].confident:
             return "synthesize"
         return "degrade_low_confidence"
@@ -372,12 +392,14 @@ def _build_graph(synthesizer, guardrail, reranker):
                 context_documents,
                 rejection_reason=state.get("guardrail_reason"),
             )
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             # FAILURE MODE: the LLM call itself errored or timed out --
             # per 02_TECHNICAL_DESIGN.md §6, this degrades directly,
             # with no retry (retries are specifically for a guardrail
             # rejection of a *received* answer, not a connectivity
-            # failure that produced no answer at all).
+            # failure that produced no answer at all). Logged for the
+            # same reason as the retrieval failure above.
+            logger.warning("Synthesis call failed: %s", exc)
             return {"answer": None, "synthesis_failed": True}
         return {"answer": answer, "synthesis_failed": False}
 
@@ -391,7 +413,22 @@ def _build_graph(synthesizer, guardrail, reranker):
             ranked.document.content
             for ranked in state["retrieval_outcome"].ranked_documents
         )
-        result = guardrail.check(context_text, state["answer"])
+        try:
+            result = guardrail.check(context_text, state["answer"])
+        except httpx.HTTPError as exc:
+            # FAILURE MODE: the guardrail call itself errored or timed
+            # out -- treated as a failed check (guardrail_passed=False),
+            # not a passed one. If verification itself is unavailable,
+            # the answer must not be assumed safe to show; this reuses
+            # the existing retry-once-then-degrade path rather than a
+            # new branch, since "couldn't verify" and "verified and
+            # rejected" both mean "don't show this yet." Logged for the
+            # same reason as the retrieval/synthesis failures above.
+            logger.warning("Guardrail check failed: %s", exc)
+            return {
+                "guardrail_passed": False,
+                "guardrail_reason": "Guardrail check itself failed; treating as unverified.",
+            }
         return {"guardrail_passed": result.passed, "guardrail_reason": result.reason}
 
     def route_after_guardrail(state: _State) -> str:
@@ -450,7 +487,11 @@ def _build_graph(synthesizer, guardrail, reranker):
     graph.add_conditional_edges(
         "retrieve",
         route_after_retrieve,
-        {"synthesize": "synthesize", "degrade_low_confidence": "degrade_low_confidence"},
+        {
+            "synthesize": "synthesize",
+            "degrade_low_confidence": "degrade_low_confidence",
+            "degrade_guardrail_or_error": "degrade_guardrail_or_error",
+        },
     )
     graph.add_conditional_edges(
         "synthesize",
@@ -506,6 +547,7 @@ def ask_help_assistant(
         {
             "question": question,
             "retrieval_outcome": None,
+            "retrieval_failed": False,
             "answer": None,
             "synthesis_failed": False,
             "guardrail_passed": None,

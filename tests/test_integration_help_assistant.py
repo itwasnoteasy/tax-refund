@@ -40,6 +40,26 @@ class _AlwaysLowConfidenceReranker:
         ]
 
 
+class _AlwaysFailingReranker:
+    """Simulates the retrieval step's own hosted-API call (embedding or
+    rerank) erroring or timing out -- a real gap found and fixed after
+    the app was actually deployed with live credentials: retrieve_node
+    originally had no error handling at all for this.
+    """
+
+    def rerank(self, query, candidates):
+        raise httpx.TimeoutException("simulated retrieval timeout")
+
+
+class _AlwaysFailingGuardrail:
+    """Simulates the guardrail's own hosted-API call erroring or timing
+    out, distinct from it running and rejecting an answer.
+    """
+
+    def check(self, context, answer):
+        raise httpx.TimeoutException("simulated guardrail timeout")
+
+
 class _AlwaysFailingSynthesizer:
     """Simulates the LLM call itself erroring or timing out."""
 
@@ -88,6 +108,38 @@ def test_simulated_llm_failure_degrades_gracefully_never_raises() -> None:
     result = graph.ask_help_assistant(
         "What is form 1040-X used for?",
         synthesizer=_AlwaysFailingSynthesizer(),
+    )
+
+    assert result.answered is False
+    assert result.answer is None
+    assert result.fallback_message == graph.GUARDRAIL_OR_ERROR_FALLBACK_MESSAGE
+
+
+def test_simulated_retrieval_failure_degrades_gracefully_never_raises() -> None:
+    """Regression test for a real gap found after deployment: the
+    retrieval step's own hosted-API call (embedding or rerank) failing
+    must degrade the same way a synthesis failure does, not propagate
+    as an unhandled exception.
+    """
+    result = graph.ask_help_assistant(
+        "What is form 1040-X used for?",
+        reranker=_AlwaysFailingReranker(),
+    )
+
+    assert result.answered is False
+    assert result.answer is None
+    assert result.fallback_message == graph.GUARDRAIL_OR_ERROR_FALLBACK_MESSAGE
+
+
+def test_simulated_guardrail_call_failure_degrades_gracefully_never_raises() -> None:
+    """The guardrail's own call failing (distinct from it running and
+    rejecting an answer) must also degrade gracefully -- an
+    unverifiable answer is treated the same as a rejected one, not
+    assumed safe to show.
+    """
+    result = graph.ask_help_assistant(
+        "What is form 1040-X used for?",
+        guardrail=_AlwaysFailingGuardrail(),
     )
 
     assert result.answered is False

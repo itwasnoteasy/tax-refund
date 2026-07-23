@@ -196,4 +196,12 @@ Format per entry:
 **Why:** Both model identifiers (`gemini-flash-latest` for synthesis/rerank/guardrail, `text-embedding-004` for embeddings) were written from training knowledge and explicitly flagged as unverified against the live API. Reading them from env vars (falling back to those same defaults) means a wrong guess is correctable via a Vercel env var and redeploy, not a code change -- directly requested once the app was actually deployed and a real model name needed adjusting.
 **Honest gap:** None -- straightforward configurability improvement, defaults unchanged from what was already there.
 
+### graph.py: retrieve_node and guardrail_node now catch httpx.HTTPError too (bug fix)
+**Why:** Only synthesize_node originally caught httpx.HTTPError -- retrieve_node (the hosted embedding/rerank call) and guardrail_node (the hosted contradiction check) had no error handling at all, so a real failure there (wrong model name, bad API key, quota, timeout) would have propagated as an unhandled exception -- an actual 500, not the graceful degradation CLAUDE.md requires everywhere in this feature. This surfaced as a real question once GEMINI_API_KEY was actually set in Vercel and the real backends became reachable for the first time, rather than something caught by inspection beforehand.
+**Honest gap:** A guardrail-check failure is treated as a failed check (routes into the same retry-then-degrade path as a rejected answer) rather than its own distinct outcome -- a deliberate simplification (verification unavailable and verification-failed both mean "don't show this yet"), not an oversight, but worth knowing the two aren't distinguished in the final response.
+
+### graph.py: warnings.logger added for retrieval/synthesis/guardrail failures
+**Why:** All three failure paths degrade to the same calm user-facing message by design -- but that means the *real* cause (wrong model name vs. bad key vs. genuine timeout) would otherwise be invisible from outside the process. Added `logger.warning(...)` at each catch site so Vercel's function logs show the actual httpx error even though the HTTP response stays gracefully degraded -- the intended way to diagnose a live failure without needing to reach the deployment directly.
+**Honest gap:** None -- purely additive observability, no behavior change.
+
 *(New entries go below this line as the build progresses.)*
