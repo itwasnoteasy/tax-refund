@@ -25,10 +25,13 @@ real-backend/local-fallback pattern as kv_store.py: a real
 implementation that calls the hosted API when credentials are present,
 and a deterministic, dependency-free local fallback otherwise, so
 local development and this module's Layer 1 tests need no network
-access and no API key. Neither the real embedding call nor the real
-LLM-rerank call can be exercised live from this environment -- see
-DECISIONS.md, matching the same caveat already recorded for
-kv_store.py's real Upstash backend.
+access and no API key. Neither real call could be exercised from this
+sandboxed dev environment directly -- but both have since been
+confirmed working end-to-end against the live deployed API (real
+GEMINI_API_KEY, gemini-2.5-flash / text-embedding-001) by the project
+owner on 2026-07-23, including the auth fix this required (API key via
+the x-goog-api-key header, not the ?key= query param -- see
+DECISIONS.md).
 """
 import os
 import re
@@ -120,14 +123,13 @@ class RetrievalOutcome:
 class _HostedEmbeddingClient:
     """Real embedding backend -- a hosted API, never a locally-loaded model.
 
-    # DECISION: Google's text-embedding-004 model via the Generative
-    # Language API, called with a plain HTTPS POST (httpx), not a full
-    # SDK -- Gemini Flash (the same provider) is already the chosen
-    # synthesis model in 02_TECHNICAL_DESIGN.md §6, and a heavier
-    # SDK is deferred to Phase 4 when synthesis is actually built. This
-    # exact model/endpoint has NOT been exercised against the live API
-    # from this environment -- no credentials or network access here.
-    # See DECISIONS.md.
+    # DECISION: Google's embedding models via the Generative Language
+    # API, called with a plain HTTPS POST (httpx), not a full SDK --
+    # Gemini (the same provider) is already the chosen synthesis model
+    # in 02_TECHNICAL_DESIGN.md §6, and a heavier SDK is deferred to
+    # Phase 4's fuller needs. Confirmed working end-to-end against the
+    # live API on 2026-07-23 (model configurable via
+    # GEMINI_EMBEDDING_MODEL). See DECISIONS.md.
     """
 
     def __init__(self, api_key: str) -> None:
@@ -361,8 +363,8 @@ class _LLMReranker:
     # DECISION: the cross-encoder path (cross-encoder/ms-marco-MiniLM-L-6-v2)
     # was not attempted -- see this module's docstring for why the risk
     # was assessed as disqualifying rather than merely worth measuring.
-    # This exact prompt/endpoint has NOT been exercised against the
-    # live API from this environment. See DECISIONS.md.
+    # Confirmed working end-to-end against the live API on 2026-07-23.
+    # See DECISIONS.md.
     """
 
     def __init__(self, api_key: str) -> None:

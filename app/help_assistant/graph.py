@@ -20,10 +20,12 @@ used for prompt templating, which is genuine, meaningful use of the
 framework without pulling in `langchain-google-genai` before Phase 4's
 fuller synthesis needs justify it. See DECISIONS.md.
 
-Neither real backend (Gemini synthesis, Gemini guardrail) has been
-exercised against a live API from this environment -- same caveat
-already recorded for retrieval.py's embedding/rerank calls and
-kv_store.py's real Upstash backend.
+Neither real backend could be exercised from this sandboxed dev
+environment directly, but both have since been confirmed working
+end-to-end against the live deployed API (real GEMINI_API_KEY,
+gemini-2.5-flash) by the project owner on 2026-07-23 -- including the
+auth fix this required (API key via the x-goog-api-key header, not the
+?key= query param -- see DECISIONS.md).
 """
 import logging
 import os
@@ -127,8 +129,8 @@ class HelpAskResult:
 class _GeminiSynthesizer:
     """Real synthesis backend -- Gemini Flash, strictly grounded in the
     retrieved context, with an explicit instruction not to answer
-    beyond it. Not exercised against the live API from this
-    environment -- see this module's docstring.
+    beyond it. Confirmed working end-to-end against the live API on
+    2026-07-23 -- see this module's docstring.
     """
 
     _PROMPT = PromptTemplate.from_template(
@@ -249,8 +251,8 @@ class _GeminiGuardrail:
     # classifier model -- the same cold-start reasoning that ruled out
     # a local cross-encoder in retrieval.py applies here too (a real
     # NLI model is a real ML dependency with the same deployability
-    # risk). Not exercised against the live API from this environment.
-    # See DECISIONS.md.
+    # risk). Confirmed working end-to-end against the live API on
+    # 2026-07-23. See DECISIONS.md.
     """
 
     _PROMPT = PromptTemplate.from_template(
