@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from api.index import app
 from app import kv_store, mock_irs, storage
+from app.help_assistant import retrieval
 from tests._contract import assert_matches_schema, load_contract
 
 _KV_ENV_VARS = (
@@ -23,15 +24,19 @@ _KV_ENV_VARS = (
     "UPSTASH_REDIS_REST_URL",
     "UPSTASH_REDIS_REST_TOKEN",
 )
+_LLM_ENV_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
 
 
 @pytest.fixture(autouse=True)
 def _reset_state(monkeypatch: pytest.MonkeyPatch):
-    for name in _KV_ENV_VARS:
+    for name in _KV_ENV_VARS + _LLM_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     storage.reset_seed_data()
     kv_store.reset_local_backend()
     mock_irs.set_mode(mock_irs.IRSMode.NORMAL)
+    retrieval.reset_corpus_embeddings_cache()
+    retrieval.reset_bm25_index_cache()
+    retrieval.reset_default_embedding_client_cache()
     yield
     kv_store.reset_local_backend()
 
@@ -82,6 +87,19 @@ def test_refund_status_400_matches_contract(client, contract) -> None:
     assert_matches_schema(
         response.json(), contract, "/refund-status/{return_id}", "get", "400"
     )
+
+
+def test_help_ask_200_matches_contract(client, contract) -> None:
+    """Uses the local, credential-free fallback (no GEMINI_API_KEY in
+    this environment) -- still a real end-to-end run of the LangGraph
+    pipeline, just against the deterministic fallback backends.
+    """
+    response = client.post(
+        "/help/ask", json={"question": "What is form 1040-X used for?"}
+    )
+    assert response.status_code == 200
+    assert response.json()["answered"] is True
+    assert_matches_schema(response.json(), contract, "/help/ask", "post", "200")
 
 
 def test_notifications_opt_in_200_matches_contract(client, contract) -> None:
@@ -142,6 +160,6 @@ def test_docs_and_openapi_json_are_reachable(client) -> None:
         "/notifications/opt-in",
         "/notifications/preview/{return_id}",
         "/demo/set-irs-mode",
+        "/help/ask",
     ):
         assert path in openapi_schema["paths"]
-    assert "/help/ask" not in openapi_schema["paths"]  # Phase 4, not built yet

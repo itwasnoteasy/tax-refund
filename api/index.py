@@ -1,9 +1,8 @@
 """FastAPI application entry point -- Vercel's expected serverless location.
 
-Wires every route in docs/spec/03_API_CONTRACT.yaml except /help/ask,
-which is Phase 4 (the Tax Help Assistant, not yet built). Built against
-that contract and docs/spec/02_TECHNICAL_DESIGN.md, as committed at
-eb360db.
+Wires every route in docs/spec/03_API_CONTRACT.yaml, including
+/help/ask (the Tax Help Assistant). Built against that contract and
+docs/spec/02_TECHNICAL_DESIGN.md, as committed at eb360db.
 
 Route organization: three separate APIRouter objects (refund-status,
 notifications, demo-control), not routes defined flat on `app`. The
@@ -21,13 +20,14 @@ authority FastAPI's OpenAPI output is checked against
 (test_integration_api_contract.py), not the other way around.
 """
 from datetime import date, datetime
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app import mock_irs, notifications, refund_status, storage
+from app.help_assistant import graph as help_assistant_graph
 
 app = FastAPI(
     title="TurboTax Refund Status PoC API",
@@ -75,6 +75,19 @@ class NotificationPreviewResponseModel(BaseModel):
     return_id: str
     rendered_html: str
     note: str
+
+
+class HelpAskRequestModel(BaseModel):
+    question: str
+
+
+class HelpAskResponseModel(BaseModel):
+    question: str
+    answered: bool
+    answer: Optional[str] = None
+    sources: List[str] = []
+    confidence: Optional[float] = None
+    fallback_message: Optional[str] = None
 
 
 class SetIRSModeRequestModel(BaseModel):
@@ -227,6 +240,33 @@ def preview_notification(return_id: str) -> NotificationPreviewResponseModel:
     )
 
 
+# --- Tax Help Assistant (FR-7 -- architecturally separate from the
+# refund-status core above; the only route in this file backed by an
+# LLM, and the only one that can gracefully degrade rather than
+# succeed) --------------------------------------------------------------
+
+help_assistant_router = APIRouter(tags=["help-assistant"])
+
+
+@help_assistant_router.post("/help/ask", response_model=HelpAskResponseModel)
+def ask_help_assistant(payload: HelpAskRequestModel) -> HelpAskResponseModel:
+    """Ask the Tax Help Assistant an open-ended tax question.
+
+    Never raises for a degraded outcome -- ask_help_assistant() always
+    returns a result, answered or gracefully not, per
+    02_TECHNICAL_DESIGN.md §6's resilience philosophy for this feature.
+    """
+    result = help_assistant_graph.ask_help_assistant(payload.question)
+    return HelpAskResponseModel(
+        question=result.question,
+        answered=result.answered,
+        answer=result.answer,
+        sources=result.sources,
+        confidence=result.confidence,
+        fallback_message=result.fallback_message,
+    )
+
+
 # --- Demo control (not part of the production API surface) ----------------
 
 demo_router = APIRouter(prefix="/demo", tags=["demo-control"])
@@ -246,4 +286,5 @@ def set_irs_mode(payload: SetIRSModeRequestModel) -> dict:
 
 app.include_router(refund_status_router)
 app.include_router(notifications_router)
+app.include_router(help_assistant_router)
 app.include_router(demo_router)
