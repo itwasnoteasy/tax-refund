@@ -104,4 +104,24 @@ Format per entry:
 **Why:** No concrete rule exists anywhere in the accessible spec docs beyond "rule-based stub... tiering, calibration gate, season-versioning" (DECISIONS.md's earlier prediction entry). I invented a simple, clearly-labeled tiering: window width narrows as status progresses (RECEIVED: 21-35 days out; APPROVED: 7-14 days out), and confidence varies by filing method (e-file current year highest, paper lowest) — enough to demonstrate the architectural pattern without claiming any statistical basis.
 **Honest gap:** These specific day-ranges and confidence values are illustrative, not derived from real IRS processing-time data — exactly the same honest gap already recorded in DECISIONS.md's original "Prediction: rule-based stub" entry, now with concrete numbers attached to it.
 
+### cache_layer.py: two KV keys per return (durable value + expiring freshness marker), not one
+**Why:** A single cached entry can't both expire (to trigger the next refresh attempt) and durably persist (to serve as a stale fallback once the circuit breaker is open) -- those are two different lifetimes for the same data. Splitting them into a no-TTL "last known good" value plus a TTL'd "freshness" marker is what makes cache-aside-with-graceful-degradation actually work past the TTL boundary: without this split, the cached value would vanish entirely the instant it expired, leaving nothing to fall back on exactly when the IRS becomes unreachable.
+**Honest gap:** None specific to the PoC -- this is the real mechanism the "serve stale cache + last_validated_at" behavior in `02_TECHNICAL_DESIGN.md` §2 depends on, not a simplification.
+
+### storage.py: TaxReturn gets a custom, redacting `__repr__`
+**Why:** `audit.py`'s message-building is careful to never read `.ssn`/`.bank_account_number` into a log line, but that's only one layer of defense -- anything that ever does `logger.info(some_tax_return)` or lets the object reach a log/traceback by accident would print every field via the default dataclass repr, PII included. A custom `__repr__` that always redacts those two fields closes that gap structurally, matching CLAUDE.md's "without exception."
+**Honest gap:** None -- this is strictly additive safety, doesn't change any existing behavior or test.
+
+### refund_status.py/notifications.py: RETURN_NOT_FOUND and unknown-return errors both raise storage.ReturnNotFoundError
+**Why:** One shared exception, defined in storage.py, rather than a near-identical class per module for "this return_id doesn't exist." Keeps the exception grouped with the entity it concerns and avoids callers needing to catch different types for the same underlying condition depending on which module raised it.
+**Honest gap:** None.
+
+### notifications.py: opt-in idempotency via a deterministic event_id, not a separate "already opted in" check
+**Why:** `event_id = f"optin:{return_id}:{channel}"` makes storage.record_notification_event's existing dedup-by-event_id logic handle idempotency for free -- opting in twice for the same return/channel naturally collapses to one stored event, with no additional check needed here.
+**Honest gap:** This assumes a return only ever wants one notification-event record per channel (opt-in state, not a history of opt-in/opt-out toggles) -- fine for this PoC's scope (03_API_CONTRACT.yaml has no opt-out endpoint), but wouldn't extend cleanly to a real opt-out feature without a different event shape.
+
+### storage.py: find_tax_return_by_id() added because notification endpoints don't take tax_year
+**Why:** `03_API_CONTRACT.yaml`'s `/notifications/opt-in` and `/notifications/preview/{return_id}` both take only `return_id` -- no `tax_year`, unlike `/refund-status`. Since storage.py is keyed by `(return_id, tax_year)` per FR-1's "year must be explicit" rule, notifications.py needs a different lookup, added as `find_tax_return_by_id()`.
+**Honest gap:** This is safe only because every seeded return_id happens to be unique across tax years in this PoC. A return_id reused across multiple tax years would make the notification contract genuinely ambiguous (which year's return gets opted in?) -- a gap inherited from how `03_API_CONTRACT.yaml` itself is written, not something invented here. Not escalated as a formal Open Question since it doesn't block correctness for this PoC's data and has a documented, reasonable resolution -- worth revisiting if real multi-year return_id reuse is ever a possibility.
+
 *(New entries go below this line as the build progresses.)*

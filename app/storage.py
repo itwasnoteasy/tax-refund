@@ -87,6 +87,24 @@ class TaxReturn:
     ssn: str
     bank_account_number: Optional[str]
 
+    def __repr__(self) -> str:
+        # DECISION: a custom __repr__ that redacts ssn/bank_account_number,
+        # rather than relying on every caller to remember never to log this
+        # object directly. CLAUDE.md's redaction rule is "without
+        # exception" -- audit.py's own careful message-building is the
+        # primary defense, but this is a second, structural one: even an
+        # accidental `logger.info(some_tax_return)` anywhere in the
+        # codebase, now or in the future, can't leak these two fields.
+        # See DECISIONS.md.
+        return (
+            f"TaxReturn(return_id={self.return_id!r}, tax_year={self.tax_year!r}, "
+            f"filing_status={self.filing_status!r}, "
+            f"filing_method={self.filing_method!r}, "
+            f"expected_refund_amount={self.expected_refund_amount!r}, "
+            f"has_eitc_ctc_flag={self.has_eitc_ctc_flag!r}, "
+            f"ssn='[REDACTED]', bank_account_number='[REDACTED]')"
+        )
+
 
 @dataclass(frozen=True)
 class RefundStatus:
@@ -157,6 +175,18 @@ class NotificationEvent:
     created_at: datetime
 
 
+class ReturnNotFoundError(Exception):
+    """No return_id/tax_year known to this system.
+
+    Defined here (not in each caller) so refund_status.py and
+    notifications.py raise the same exception for the same underlying
+    condition, rather than duplicating near-identical exception classes.
+    storage.py's own lookup functions still return None on a miss (their
+    established, non-raising contract, unchanged) -- callers that decide
+    absence is an error raise this themselves.
+    """
+
+
 @dataclass(frozen=True)
 class AuditLogEntry:
     """A single, already-redacted audit log entry.
@@ -202,6 +232,30 @@ def get_tax_return(return_id: str, tax_year: int) -> Optional[TaxReturn]:
     return _TAX_RETURNS.get((return_id, tax_year))
 
 
+def find_tax_return_by_id(return_id: str) -> Optional[TaxReturn]:
+    """Find a TaxReturn by return_id alone, without a tax_year.
+
+    # DECISION: needed because 03_API_CONTRACT.yaml's notification
+    # endpoints (opt-in, preview) take only return_id -- unlike
+    # /refund-status, which requires tax_year explicitly per FR-1's "the
+    # year must be explicit" rule. Safe for this PoC's seed data, where
+    # each return_id happens to be unique across tax years; would be
+    # genuinely ambiguous (which year?) for a return_id that existed
+    # under more than one, a gap inherited from the API contract itself,
+    # not invented here. See DECISIONS.md.
+
+    Args:
+        return_id: The return's unique identifier.
+
+    Returns:
+        The first matching TaxReturn found, or None if none exists.
+    """
+    for tax_return in _TAX_RETURNS.values():
+        if tax_return.return_id == return_id:
+            return tax_return
+    return None
+
+
 def get_refund_status(return_id: str, tax_year: int) -> Optional[RefundStatus]:
     """Fetch the current known RefundStatus for a given return/tax year.
 
@@ -244,6 +298,15 @@ def record_notification_event(event: NotificationEvent) -> bool:
         return False
     _NOTIFICATION_EVENTS[event.event_id] = event
     return True
+
+
+def get_notification_events() -> List[NotificationEvent]:
+    """Return a defensive copy of all recorded notification events.
+
+    Returns:
+        A new list; mutating it does not affect stored state.
+    """
+    return list(_NOTIFICATION_EVENTS.values())
 
 
 def append_audit_log(entry: AuditLogEntry) -> None:
