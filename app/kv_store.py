@@ -34,6 +34,15 @@ from typing import Dict, Optional, Tuple
 _KV_URL_ENV_VARS = ("KV_REST_API_URL", "UPSTASH_REDIS_REST_URL")
 _KV_TOKEN_ENV_VARS = ("KV_REST_API_TOKEN", "UPSTASH_REDIS_REST_TOKEN")
 
+# DECISION: module-level, not a _LocalBackend instance attribute. The real
+# backend is safe to reconstruct freely because the state lives in the
+# remote KV service, not in the client object -- callers (e.g. mock_irs.py)
+# rely on being able to construct a fresh KVStore() per call the same way.
+# A per-instance dict here would silently break that: two separately
+# constructed KVStores would each see an empty store, contradicting this
+# class's own "single-process dict" premise. See DECISIONS.md.
+_LOCAL_STORE: Dict[str, Tuple[str, Optional[float]]] = {}
+
 
 def _first_env(names: Tuple[str, ...]) -> Optional[str]:
     """Return the value of the first set environment variable in `names`.
@@ -67,7 +76,7 @@ class _LocalBackend:
     """
 
     def __init__(self) -> None:
-        self._data: Dict[str, Tuple[str, Optional[float]]] = {}
+        self._data = _LOCAL_STORE
 
     def get(self, key: str) -> Optional[str]:
         """Fetch a value by key, honoring TTL expiry.
@@ -124,6 +133,14 @@ class _LocalBackend:
         # has ~0.7s left, which should read as "1 second remaining," not
         # "0" -- truncating would make a still-valid key look expired.
         return math.ceil(remaining)
+
+    def delete(self, key: str) -> None:
+        """Remove a key, if present.
+
+        Args:
+            key: The key to remove.
+        """
+        self._data.pop(key, None)
 
 
 class _UpstashBackend:
@@ -188,6 +205,14 @@ class _UpstashBackend:
             return None
         return int(remaining)
 
+    def delete(self, key: str) -> None:
+        """Remove a key from Vercel KV, if present.
+
+        Args:
+            key: The key to remove.
+        """
+        self._client.delete(key)
+
 
 class KVStore:
     """Redis-shaped get/set/ttl interface, backed by Vercel KV.
@@ -245,3 +270,23 @@ class KVStore:
             has already expired, or was set with no TTL.
         """
         return self._backend.ttl(key)
+
+    def delete(self, key: str) -> None:
+        """Remove a key, if present.
+
+        Args:
+            key: The key to remove.
+        """
+        self._backend.delete(key)
+
+
+def reset_local_backend() -> None:
+    """Clear the shared local in-memory fallback store.
+
+    Test-support only -- lets tests that exercise the local backend
+    (directly, or indirectly via a caller like mock_irs.py) start from
+    a known empty state without restarting the process. Has no effect
+    on the real Upstash backend, and is never called from application
+    code.
+    """
+    _LOCAL_STORE.clear()

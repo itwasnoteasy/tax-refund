@@ -31,6 +31,14 @@ Stating the reason for each exclusion matters: in an interview, "I deliberately 
 
 **A note on Vercel KV specifically:** this introduces a real network round-trip where the original design assumed in-memory speed. This is disclosed explicitly in `01_SPEC.md`'s NFR table rather than quietly accepted — if the p99 < 200ms cached-read target is genuinely at risk once deployed, that's worth knowing and saying plainly, not hiding.
 
+## Post-deployment observations — worth a second look
+
+Flagged here rather than silently reconciled, per this file's own stated purpose ("state the reason for each exclusion"). None of these block the demo; all are already fixed or working, but the scope table's framing didn't anticipate them before the app was actually deployed.
+
+- **"Real Redis" row (line 13) is now stale.** It still describes an in-memory TTL dict as the excluded stand-in, but `CLAUDE.md`'s Vercel section (and the "State persistence: Vercel KV" entry in `DECISIONS.md`) superseded that with real Vercel KV (Upstash) for cache/circuit-breaker/demo-mode state — the in-memory dict is now only the *local-dev fallback* when KV env vars are absent, not the PoC's actual excluded stand-in for Redis. Worth rewording this row so it doesn't read as contradicting `CLAUDE.md`'s explicit "must live in Vercel KV, not a plain Python dict" instruction.
+- **"React / no build tooling" row (line 23) named `npm install` breaking as the risk being avoided — the risk that actually materialized was different and lower-level.** The CDN-based frontend itself never had a build-tool failure; the real live 404 came from `vercel.json`'s `builds` array never declaring a build target for `static/` at all, so nothing shipped those files to the deployment regardless of the no-build-step frontend choice being correct. Worth noting for anyone reading this scope table as "therefore the static frontend deploys automatically" — it doesn't, without an explicit `@vercel/static` build entry (now added, see `DECISIONS.md`).
+- **No row in this table anticipated a deploy-config gap being invisible to local testing.** `TestClient`-based verification (used for `/docs`, `/openapi.json`, and every API-level test in this repo) runs the ASGI app directly and cannot exercise Vercel's own build/routing pipeline — a `vercel.json` misconfiguration is structurally a category of bug none of this repo's automated tests can catch, only a real deployment can. Same category as the KV cross-invocation behavior already called out in `CLAUDE.md`, just for the build config instead of the runtime.
+
 ## Spec-Drift Proposal Template
 
 Use this exact structure when logging an Open Question below — a fast-path, lightweight version of the "impact analysis" the source material recommends, sized for a solo build rather than a team change-approval process:

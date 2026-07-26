@@ -2,3 +2,5 @@ fastapi
 langchain
 langgraph
 upstash-redis
+httpx
+rank-bm25

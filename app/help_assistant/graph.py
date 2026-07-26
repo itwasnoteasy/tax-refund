@@ -1,10 +1,601 @@
 """LangGraph orchestration: retrieve -> rerank -> synthesize -> guardrail
 -> retry-once -> graceful degradation.
 
-Scaffold only, no implementation yet. Reuses the NLI-style contradiction
-check and confidence gating pattern already designed for the broader
-system rather than inventing a new guardrail approach (02_TECHNICAL_DESIGN.md
-§6) — the referenced source diagrams (04_synthesis_guardrails.mermaid,
-06_multiagent_langgraph.mermaid) are not present in this repo; see the
-Open Question logged in docs/spec/06_SCOPE.md.
+Built against docs/spec/02_TECHNICAL_DESIGN.md §6, as committed at
+eb360db.
+
+Why LangGraph for something this small: the conditional
+retry-on-guardrail-failure logic is a genuine, if small, state machine
+(synthesize -> guardrail -> maybe back to synthesize -> maybe degrade),
+not a linear pipeline -- proportionate to the task, not framework-
+flexing. Reuses the NLI-style contradiction check and confidence-gating
+pattern already designed for the broader system
+(04_synthesis_guardrails.mermaid) rather than inventing a new guardrail
+approach -- adapted here, not reinvented.
+
+Synthesis and the guardrail check both call Gemini Flash directly via
+httpx (same lightweight pattern as retrieval.py's embedding/reranker
+calls), not a provider SDK -- LangChain (`langchain_core.prompts`) is
+used for prompt templating, which is genuine, meaningful use of the
+framework without pulling in `langchain-google-genai` before Phase 4's
+fuller synthesis needs justify it. See DECISIONS.md.
+
+Neither real backend could be exercised from this sandboxed dev
+environment directly, but both have since been confirmed working
+end-to-end against the live deployed API (real GEMINI_API_KEY,
+gemini-2.5-flash) by the project owner on 2026-07-23 -- including the
+auth fix this required (API key via the x-goog-api-key header, not the
+?key= query param -- see DECISIONS.md).
 """
+import logging
+import os
+from dataclasses import dataclass, field
+from typing import List, Optional, TypedDict
+
+import httpx
+from langchain_core.prompts import PromptTemplate
+from langgraph.graph import END, StateGraph
+
+from app.help_assistant import retrieval
+from app.help_assistant.faq_corpus import FAQDocument
+
+logger = logging.getLogger("app.help_assistant.graph")
+
+_LLM_API_KEY_ENV_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
+
+# DECISION: retry exactly once on a guardrail rejection, per
+# 02_TECHNICAL_DESIGN.md §6 -- not a general retry/backoff count, just
+# this one specific "try again with the rejection reason fed back in"
+# step.
+RETRY_LIMIT = 1
+
+# Two distinct fallback messages for two distinct reasons -- the spec
+# gives different wording for each, not one generic "can't answer" text:
+CONFIDENCE_GATE_FALLBACK_MESSAGE = (
+    "I don't have a confident answer to that. For official guidance, see "
+    "the IRS's own help resources at irs.gov."
+)
+GUARDRAIL_OR_ERROR_FALLBACK_MESSAGE = (
+    "I'm not able to answer that confidently right now. Please try again "
+    "shortly."
+)
+
+# DECISION: model name read from an env var, not hardcoded -- same
+# reasoning as retrieval.py's _gemini_model()/_gemini_embedding_model():
+# unverified against the live API from this environment, so a wrong
+# guess should be correctable via a Vercel env var, not a code change.
+_DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+
+
+def _gemini_model() -> str:
+    """The Gemini model used for synthesis/guardrail calls.
+
+    Override via the GEMINI_MODEL env var.
+    """
+    return os.environ.get("GEMINI_MODEL", _DEFAULT_GEMINI_MODEL)
+
+
+def _describe_httpx_error(exc: httpx.HTTPError) -> str:
+    """Render an httpx error with enough detail to actually diagnose it.
+
+    # DECISION: str(exc) alone, for httpx.HTTPStatusError, is just
+    # "Client error '404 Not Found' for url ...' -- it does NOT include
+    # the response body, which is exactly where Google's API puts the
+    # actual reason (e.g. "model not found", "API key not valid").
+    # Every degrade path in this graph shows the same calm message to
+    # the user by design, so this detail is only ever visible here, in
+    # the log line -- see DECISIONS.md.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return (
+            f"{exc.response.status_code} {exc.response.reason_phrase}: "
+            f"{exc.response.text[:500]}"
+        )
+    return f"{type(exc).__name__}: {exc}"
+
+
+@dataclass(frozen=True)
+class GuardrailResult:
+    """The outcome of one NLI-style contradiction check."""
+
+    passed: bool
+    reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class HelpAskResult:
+    """Mirrors HelpAskResponse in 03_API_CONTRACT.yaml exactly.
+
+    Attributes:
+        question: The original question.
+        answered: False if the assistant degraded gracefully.
+        answer: Populated only when answered is True.
+        sources: FAQ corpus doc_ids the answer was grounded in.
+        confidence: The top retrieval/rerank score, when answered.
+        fallback_message: Populated only when answered is False.
+    """
+
+    question: str
+    answered: bool
+    answer: Optional[str] = None
+    sources: List[str] = field(default_factory=list)
+    confidence: Optional[float] = None
+    fallback_message: Optional[str] = None
+
+
+# --- Synthesis: Gemini Flash, real backend + extractive local fallback -----
+
+
+class _GeminiSynthesizer:
+    """Real synthesis backend -- Gemini Flash, strictly grounded in the
+    retrieved context, with an explicit instruction not to answer
+    beyond it. Confirmed working end-to-end against the live API on
+    2026-07-23 -- see this module's docstring.
+    """
+
+    _PROMPT = PromptTemplate.from_template(
+        "Answer the user's tax question using ONLY the context below. "
+        "If the context doesn't fully answer the question, say so plainly -- "
+        "never state anything not directly supported by the context.\n\n"
+        "Context:\n{context}\n\nQuestion: {question}{retry_note}\n\nAnswer:"
+    )
+
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
+
+    def synthesize(
+        self,
+        question: str,
+        context_documents: List[FAQDocument],
+        rejection_reason: Optional[str] = None,
+    ) -> str:
+        """Generate an answer grounded in context_documents.
+
+        Args:
+            question: The user's free-text question.
+            context_documents: The retrieved, reranked FAQ documents to
+                ground the answer in.
+            rejection_reason: If this is a retry after a guardrail
+                rejection, the reason fed back in to correct it.
+
+        Returns:
+            The generated answer text.
+
+        Raises:
+            httpx.HTTPError: The request failed, errored, or timed out.
+        """
+        context_text = "\n\n".join(
+            f"[{doc.doc_id}] {doc.title}: {doc.content}"
+            for doc in context_documents
+        )
+        retry_note = (
+            f"\n\nYour previous answer was rejected for this reason: "
+            f"{rejection_reason}\nRevise your answer to fix this, still "
+            f"using only the context above."
+            if rejection_reason
+            else ""
+        )
+        prompt = self._PROMPT.format(
+            context=context_text, question=question, retry_note=retry_note
+        )
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{_gemini_model()}:generateContent"
+        )
+        # DECISION: API key in the x-goog-api-key header, not the
+        # ?key= query param -- confirmed live that newer-format ("AQ.")
+        # Google API keys are rejected via the query param but accepted
+        # via this header. See DECISIONS.md.
+        response = httpx.post(
+            endpoint,
+            headers={"x-goog-api-key": self._api_key},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        return response.json()["candidates"][0]["content"]["parts"][0][
+            "text"
+        ].strip()
+
+
+class _ExtractiveFallbackSynthesizer:
+    """Local, credential-free fallback -- returns the top retrieved
+    document's content verbatim, with no generation step at all.
+
+    # FAILURE MODE: this is not a substitute for real synthesis in
+    # production -- it exists so local development and this module's
+    # Layer 2 tests can exercise the full retrieve -> synthesize ->
+    # guardrail flow deterministically, with no network access.
+    # Because it returns the context verbatim, it can never contradict
+    # that context, so the guardrail always passes against it -- this
+    # is what makes the "well-covered question returns a grounded
+    # answer" test possible without a live LLM. Selected automatically
+    # only when no Gemini credentials are present, mirroring
+    # retrieval.py's get_default_embedding_client()/get_default_reranker().
+    """
+
+    def synthesize(
+        self,
+        question: str,
+        context_documents: List[FAQDocument],
+        rejection_reason: Optional[str] = None,
+    ) -> str:
+        if not context_documents:
+            return "I don't have information on that in my FAQ corpus."
+        return context_documents[0].content
+
+
+def get_default_synthesizer():
+    """Select a synthesizer based on credential presence.
+
+    Returns:
+        _GeminiSynthesizer if GEMINI_API_KEY or GOOGLE_API_KEY is set;
+        otherwise _ExtractiveFallbackSynthesizer.
+    """
+    for env_var in _LLM_API_KEY_ENV_VARS:
+        api_key = os.environ.get(env_var)
+        if api_key:
+            return _GeminiSynthesizer(api_key)
+    return _ExtractiveFallbackSynthesizer()
+
+
+# --- Guardrail: NLI-style contradiction check, real backend + lexical fallback --
+
+
+class _GeminiGuardrail:
+    """Real guardrail backend -- asks Gemini itself to judge whether the
+    generated answer contradicts, or claims something beyond, the
+    retrieved context.
+
+    # DECISION: an LLM-prompted check, not a locally-loaded NLI
+    # classifier model -- the same cold-start reasoning that ruled out
+    # a local cross-encoder in retrieval.py applies here too (a real
+    # NLI model is a real ML dependency with the same deployability
+    # risk). Confirmed working end-to-end against the live API on
+    # 2026-07-23. See DECISIONS.md.
+    """
+
+    _PROMPT = PromptTemplate.from_template(
+        "You are checking for contradiction, not general quality. "
+        "Premise (retrieved context): {context}\n\n"
+        "Hypothesis (generated answer): {answer}\n\n"
+        "Does the hypothesis contradict the premise, or state anything not "
+        "supported by it? Respond with only one word: CONSISTENT or "
+        "CONTRADICTION."
+    )
+
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
+
+    def check(self, context: str, answer: str) -> GuardrailResult:
+        """Run the contradiction check.
+
+        Args:
+            context: The retrieved context (premise).
+            answer: The generated answer (hypothesis).
+
+        Returns:
+            A GuardrailResult.
+
+        Raises:
+            httpx.HTTPError: The request failed, errored, or timed out.
+        """
+        prompt = self._PROMPT.format(context=context, answer=answer)
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{_gemini_model()}:generateContent"
+        )
+        # DECISION: see the matching comment in _GeminiSynthesizer.synthesize()
+        # -- x-goog-api-key header, not ?key= query param.
+        response = httpx.post(
+            endpoint,
+            headers={"x-goog-api-key": self._api_key},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        raw_text = response.json()["candidates"][0]["content"]["parts"][0][
+            "text"
+        ].upper()
+        passed = "CONTRADICTION" not in raw_text
+        return GuardrailResult(
+            passed=passed,
+            reason=(
+                None
+                if passed
+                else "The generated answer contradicted, or went beyond, "
+                "the retrieved context."
+            ),
+        )
+
+
+_LEXICAL_OVERLAP_THRESHOLD = 0.5
+
+
+class _LexicalOverlapGuardrail:
+    """Local, credential-free fallback -- checks that most of the
+    answer's words actually appear in the retrieved context, as a crude
+    stand-in for a real entailment check.
+
+    # FAILURE MODE: not a real contradiction check -- pure word overlap,
+    # so a fluent but unsupported claim built entirely from
+    # context-adjacent vocabulary could slip through. Local dev/test
+    # only; selected automatically only when no Gemini credentials are
+    # present.
+    """
+
+    def check(self, context: str, answer: str) -> GuardrailResult:
+        context_tokens = set(retrieval._tokenize(context))
+        answer_tokens = set(retrieval._tokenize(answer))
+        if not answer_tokens:
+            return GuardrailResult(passed=False, reason="Empty answer.")
+        overlap_ratio = len(answer_tokens & context_tokens) / len(answer_tokens)
+        passed = overlap_ratio >= _LEXICAL_OVERLAP_THRESHOLD
+        return GuardrailResult(
+            passed=passed,
+            reason=(
+                None
+                if passed
+                else (
+                    f"Only {overlap_ratio:.0%} of the answer's words appear "
+                    "in the retrieved context."
+                )
+            ),
+        )
+
+
+def get_default_guardrail():
+    """Select a guardrail based on credential presence.
+
+    Returns:
+        _GeminiGuardrail if GEMINI_API_KEY or GOOGLE_API_KEY is set;
+        otherwise _LexicalOverlapGuardrail.
+    """
+    for env_var in _LLM_API_KEY_ENV_VARS:
+        api_key = os.environ.get(env_var)
+        if api_key:
+            return _GeminiGuardrail(api_key)
+    return _LexicalOverlapGuardrail()
+
+
+# --- Graph state and construction -------------------------------------------
+
+
+class _State(TypedDict):
+    question: str
+    retrieval_outcome: Optional[retrieval.RetrievalOutcome]
+    retrieval_failed: bool
+    answer: Optional[str]
+    synthesis_failed: bool
+    guardrail_passed: Optional[bool]
+    guardrail_reason: Optional[str]
+    retry_count: int
+    degrade_reason: Optional[str]
+    result: Optional[HelpAskResult]
+
+
+def _build_graph(synthesizer, guardrail, reranker):
+    """Construct the compiled LangGraph for one request.
+
+    A fresh graph is built per call (cheap -- no I/O happens until a
+    node actually runs) so synthesizer/guardrail/reranker can be
+    injected per call, which is what makes this deterministically
+    testable without live credentials -- see
+    test_integration_help_assistant.py.
+    """
+
+    def retrieve_node(state: _State) -> dict:
+        try:
+            outcome = retrieval.retrieve_and_rerank(
+                state["question"], reranker=reranker
+            )
+        except httpx.HTTPError as exc:
+            # FAILURE MODE: the hosted embedding or LLM-rerank call
+            # itself errored or timed out -- must degrade gracefully,
+            # same as a synthesis failure, never an unhandled 500
+            # (CLAUDE.md's resilience philosophy for this feature).
+            # Logged here (not swallowed silently) so a real cause --
+            # wrong model name, bad API key, quota -- is visible in
+            # Vercel's function logs even though the user only sees a
+            # calm fallback message.
+            logger.warning("Retrieval call failed: %s", _describe_httpx_error(exc))
+            return {"retrieval_outcome": None, "retrieval_failed": True}
+        return {"retrieval_outcome": outcome, "retrieval_failed": False}
+
+    def route_after_retrieve(state: _State) -> str:
+        if state["retrieval_failed"]:
+            return "degrade_guardrail_or_error"
+        if state["retrieval_outcome"].confident:
+            return "synthesize"
+        logger.info(
+            "Confidence gate tripped for question %r -- top score below floor.",
+            state["question"],
+        )
+        return "degrade_low_confidence"
+
+    def synthesize_node(state: _State) -> dict:
+        context_documents = [
+            ranked.document for ranked in state["retrieval_outcome"].ranked_documents
+        ]
+        try:
+            answer = synthesizer.synthesize(
+                state["question"],
+                context_documents,
+                rejection_reason=state.get("guardrail_reason"),
+            )
+        except httpx.HTTPError as exc:
+            # FAILURE MODE: the LLM call itself errored or timed out --
+            # per 02_TECHNICAL_DESIGN.md §6, this degrades directly,
+            # with no retry (retries are specifically for a guardrail
+            # rejection of a *received* answer, not a connectivity
+            # failure that produced no answer at all). Logged for the
+            # same reason as the retrieval failure above.
+            logger.warning("Synthesis call failed: %s", _describe_httpx_error(exc))
+            return {"answer": None, "synthesis_failed": True}
+        return {"answer": answer, "synthesis_failed": False}
+
+    def route_after_synthesize(state: _State) -> str:
+        if state["synthesis_failed"]:
+            return "degrade_guardrail_or_error"
+        return "guardrail"
+
+    def guardrail_node(state: _State) -> dict:
+        context_text = "\n\n".join(
+            ranked.document.content
+            for ranked in state["retrieval_outcome"].ranked_documents
+        )
+        try:
+            result = guardrail.check(context_text, state["answer"])
+        except httpx.HTTPError as exc:
+            # FAILURE MODE: the guardrail call itself errored or timed
+            # out -- treated as a failed check (guardrail_passed=False),
+            # not a passed one. If verification itself is unavailable,
+            # the answer must not be assumed safe to show; this reuses
+            # the existing retry-once-then-degrade path rather than a
+            # new branch, since "couldn't verify" and "verified and
+            # rejected" both mean "don't show this yet." Logged for the
+            # same reason as the retrieval/synthesis failures above.
+            logger.warning("Guardrail check failed: %s", _describe_httpx_error(exc))
+            return {
+                "guardrail_passed": False,
+                "guardrail_reason": "Guardrail check itself failed; treating as unverified.",
+            }
+        if not result.passed:
+            # Not an error -- the guardrail ran fine and genuinely
+            # rejected the answer. Logged distinctly from the exception
+            # cases above so Vercel's logs can tell "the call failed"
+            # apart from "it ran and said no."
+            logger.info(
+                "Guardrail rejected answer (retry_count=%s): %s",
+                state["retry_count"],
+                result.reason,
+            )
+        return {"guardrail_passed": result.passed, "guardrail_reason": result.reason}
+
+    def route_after_guardrail(state: _State) -> str:
+        if state["guardrail_passed"]:
+            return "success"
+        if state["retry_count"] >= RETRY_LIMIT:
+            # FAILURE MODE: the retry also failed the guardrail -- never
+            # show a flagged response, degrade instead (CLAUDE.md,
+            # 02_TECHNICAL_DESIGN.md §6).
+            return "degrade_guardrail_or_error"
+        return "retry"
+
+    def increment_retry_node(state: _State) -> dict:
+        return {"retry_count": state["retry_count"] + 1}
+
+    def success_node(state: _State) -> dict:
+        outcome = state["retrieval_outcome"]
+        return {
+            "result": HelpAskResult(
+                question=state["question"],
+                answered=True,
+                answer=state["answer"],
+                sources=[ranked.document.doc_id for ranked in outcome.ranked_documents],
+                confidence=outcome.ranked_documents[0].score,
+            )
+        }
+
+    def degrade_low_confidence_node(state: _State) -> dict:
+        return {
+            "result": HelpAskResult(
+                question=state["question"],
+                answered=False,
+                fallback_message=CONFIDENCE_GATE_FALLBACK_MESSAGE,
+            )
+        }
+
+    def degrade_guardrail_or_error_node(state: _State) -> dict:
+        return {
+            "result": HelpAskResult(
+                question=state["question"],
+                answered=False,
+                fallback_message=GUARDRAIL_OR_ERROR_FALLBACK_MESSAGE,
+            )
+        }
+
+    graph = StateGraph(_State)
+    graph.add_node("retrieve", retrieve_node)
+    graph.add_node("synthesize", synthesize_node)
+    graph.add_node("guardrail", guardrail_node)
+    graph.add_node("increment_retry", increment_retry_node)
+    graph.add_node("success", success_node)
+    graph.add_node("degrade_low_confidence", degrade_low_confidence_node)
+    graph.add_node("degrade_guardrail_or_error", degrade_guardrail_or_error_node)
+
+    graph.set_entry_point("retrieve")
+    graph.add_conditional_edges(
+        "retrieve",
+        route_after_retrieve,
+        {
+            "synthesize": "synthesize",
+            "degrade_low_confidence": "degrade_low_confidence",
+            "degrade_guardrail_or_error": "degrade_guardrail_or_error",
+        },
+    )
+    graph.add_conditional_edges(
+        "synthesize",
+        route_after_synthesize,
+        {
+            "guardrail": "guardrail",
+            "degrade_guardrail_or_error": "degrade_guardrail_or_error",
+        },
+    )
+    graph.add_conditional_edges(
+        "guardrail",
+        route_after_guardrail,
+        {
+            "success": "success",
+            "retry": "increment_retry",
+            "degrade_guardrail_or_error": "degrade_guardrail_or_error",
+        },
+    )
+    graph.add_edge("increment_retry", "synthesize")
+    graph.add_edge("success", END)
+    graph.add_edge("degrade_low_confidence", END)
+    graph.add_edge("degrade_guardrail_or_error", END)
+
+    return graph.compile()
+
+
+def ask_help_assistant(
+    question: str, synthesizer=None, guardrail=None, reranker=None
+) -> HelpAskResult:
+    """Run the full retrieve -> synthesize -> guardrail -> retry ->
+    degrade pipeline for one question.
+
+    Args:
+        question: The user's free-text tax question.
+        synthesizer: Defaults to get_default_synthesizer(). Injectable
+            for deterministic testing.
+        guardrail: Defaults to get_default_guardrail(). Injectable for
+            deterministic testing.
+        reranker: Passed through to retrieval.retrieve_and_rerank();
+            defaults to retrieval.get_default_reranker().
+
+    Returns:
+        A HelpAskResult -- always, even on failure. This function never
+        raises for a degraded outcome; that's the whole point of the
+        graceful-degradation path.
+    """
+    compiled_graph = _build_graph(
+        synthesizer or get_default_synthesizer(),
+        guardrail or get_default_guardrail(),
+        reranker,
+    )
+    final_state = compiled_graph.invoke(
+        {
+            "question": question,
+            "retrieval_outcome": None,
+            "retrieval_failed": False,
+            "answer": None,
+            "synthesis_failed": False,
+            "guardrail_passed": None,
+            "guardrail_reason": None,
+            "retry_count": 0,
+            "degrade_reason": None,
+            "result": None,
+        }
+    )
+    return final_state["result"]
