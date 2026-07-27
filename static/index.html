@@ -159,6 +159,15 @@
         </div>
       </template>
 
+      <template x-if="isWindowOverdue()">
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <svg class="w-5 h-5 text-slate-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <p class="text-sm text-slate-700">
+            Your refund is taking a little longer than typical — this happens and doesn't mean anything is wrong.
+          </p>
+        </div>
+      </template>
+
       <template x-if="status && status.status_code === 'SENT'">
         <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-start gap-3">
           <svg class="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -169,7 +178,7 @@
         </div>
       </template>
 
-      <template x-if="status && status.explanation === 'still processing' && !isPaperFiled()">
+      <template x-if="status && status.explanation === 'still processing' && !isPaperFiled() && !isWindowOverdue()">
         <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
           <svg class="w-5 h-5 text-slate-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
           <p class="text-sm text-slate-700">
@@ -358,6 +367,22 @@ function app() {
 
     isPaperFiled() {
       return !!(this.activeUser && this.activeUser.filing_description === 'paper-filed return');
+    },
+
+    isWindowOverdue() {
+      // DECISION: inferred from the response shape, not a dedicated
+      // API field -- predicted_window is null for exactly three
+      // reasons (terminal status, paper-filed, or the window has
+      // elapsed per refund_status.py's suppression logic); the other
+      // two are already distinguishable here (status_code, isPaperFiled()),
+      // so whatever's left over is the overdue case. See DECISIONS.md.
+      return !!(
+        this.status &&
+        this.status.predicted_window === null &&
+        this.status.status_code !== 'SENT' &&
+        this.status.status_code !== 'NO_REFUND_PENDING' &&
+        !this.isPaperFiled()
+      );
     },
 
     acceptanceSentence() {

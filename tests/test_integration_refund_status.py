@@ -5,7 +5,7 @@ this is exactly what 07_TESTING_STRATEGY.md scopes to Layer 2:
 "components wired together ... through the mock IRS Integration
 Service." See docs/spec/07_TESTING_STRATEGY.md.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -196,11 +196,50 @@ def test_paper_filed_return_has_no_predicted_window_but_has_explanation() -> Non
     assert view.explanation == "still processing"
 
 
+def test_approved_return_past_its_predicted_window_shows_no_window() -> None:
+    """Frontend addition: RET-2025-00006's status_last_updated_at is set
+    far enough in the past that APPROVED's 7-14 day predicted window
+    (refund_logic.py) has already elapsed by the time this test runs --
+    refund_status.py must suppress predicted_window (null, same as the
+    terminal/paper-filed cases) rather than show a now-obviously-wrong
+    date range. See DECISIONS.md.
+    """
+    view = refund_status.get_refund_status_view("RET-2025-00006", 2025)
+    assert view.status_code == storage.StatusCode.APPROVED
+    assert view.predicted_window is None
+    assert view.explanation == "still processing"
+
+
 def test_eitc_ctc_return_gets_path_act_explanation() -> None:
     """Acceptance-criteria row 4."""
     view = refund_status.get_refund_status_view("RET-2025-00002", 2025)
     assert view.explanation is not None
     assert "PATH Act" in view.explanation
+
+
+def test_predicted_window_anchored_on_status_last_updated_at_not_today() -> None:
+    """RET-2025-00002's window (APPROVED: 7-14 days, refund_logic.py) is
+    computed relative to its status_last_updated_at timestamp, not
+    "today" -- so it stays fixed across repeated checks rather than
+    perpetually resetting to "N days from whenever you happen to look."
+    Deliberately computes the expectation the same way refund_status.py
+    does (relative to status_last_updated_at, not a hardcoded calendar
+    date) so this test keeps passing correctly once real time eventually
+    carries this seeded return's own window into the past too -- see
+    DECISIONS.md's anchor-change entry for why that's expected, not a bug.
+    """
+    view = refund_status.get_refund_status_view("RET-2025-00002", 2025)
+    status = storage.get_refund_status("RET-2025-00002", 2025)
+    assert status is not None
+    expected_end = status.status_last_updated_at.date() + timedelta(days=14)
+
+    if expected_end < date.today():
+        assert view.predicted_window is None
+    else:
+        expected_start = status.status_last_updated_at.date() + timedelta(days=7)
+        assert view.predicted_window is not None
+        assert view.predicted_window.start_date == expected_start
+        assert view.predicted_window.end_date == expected_end
 
 
 def test_unknown_return_raises_not_found() -> None:

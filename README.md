@@ -65,6 +65,7 @@ The full live-narration script is in `docs/spec/DEMO_WALKTHROUGH_SCRIPT.md`; thi
 2. Cache-warm request — sub-200ms cache-aside hit, no IRS call at all.
 3. Paper-filed return (`RET-2025-00004`) — a non-terminal status with the predicted-delivery window deliberately suppressed, so nothing contradicts the "no detail yet" framing.
 3b. Terminal SENT return (`RET-2025-00005`) — a clean, distinct "done" state instead of a stale "still processing" leftover.
+3c. Approved but past its own predicted window (`RET-2025-00006`, Karen) — the delivery window is suppressed once it's elapsed, replaced by plain language ("taking a little longer than typical") instead of a stale-looking date range.
 
 **Part 2 — Explanation logic**
 4. EITC/CTC-flagged return — the one delay reason the system can honestly explain (PATH Act hold), shown proactively.

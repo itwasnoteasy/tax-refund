@@ -157,9 +157,33 @@ def _build_cached_data(
             # together looked contradictory on screen. See DECISIONS.md.
             predicted_window = None
         else:
+            # DECISION: anchored on status_last_updated_at (when the
+            # IRS-reported status actually last changed), not
+            # date.today() (when this particular request happens to
+            # run). A window computed relative to "now" can never be
+            # observed as expired -- its end_date is always in the
+            # future by construction -- which made "the predicted
+            # window has passed, status still Approved" impossible to
+            # demonstrate honestly. Anchoring on the status's own
+            # timestamp instead means the window is set once, when the
+            # status changed, and stays fixed after that -- exactly
+            # what lets it genuinely elapse as real time passes,
+            # matching how an ETA actually behaves. See DECISIONS.md.
             predicted_window = refund_logic.predict_window(
-                status.status_code, tax_return.filing_method, date.today()
+                status.status_code,
+                tax_return.filing_method,
+                status.status_last_updated_at.date(),
             )
+            if predicted_window.end_date < date.today():
+                # FAILURE MODE (not a system failure -- an honest
+                # timing miss): the predicted window has come and gone
+                # with the refund still not sent. Showing a
+                # now-obviously-wrong date range would look broken or
+                # dishonest; suppressing it (predicted_window: null,
+                # same as the paper-filed and terminal cases) lets the
+                # caller show plain, calm language instead of a stale
+                # range -- see static/index.html's isWindowOverdue().
+                predicted_window = None
 
     return cache_layer.CachedRefundData(
         status_code=status.status_code,

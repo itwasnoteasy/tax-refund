@@ -42,7 +42,7 @@ def test_set_active_user_id_rejects_unknown_user() -> None:
 def test_list_demo_users_covers_every_seed_return_exactly_once() -> None:
     users = demo_users.list_demo_users()
     return_ids = {u.return_id for u in users}
-    assert len(users) == len(return_ids) == 5
+    assert len(users) == len(return_ids) == 6
 
 
 def test_filing_description_efile_with_direct_deposit() -> None:
@@ -58,3 +58,11 @@ def test_filing_description_efile_without_bank_account() -> None:
 def test_filing_description_paper_filed() -> None:
     tax_return = storage.get_tax_return("RET-2025-00004", 2025)
     assert demo_users.filing_description(tax_return) == "paper-filed return"
+
+
+def test_user6_maps_to_the_approved_overdue_seed_return() -> None:
+    user = demo_users.DEMO_USERS["user6"]
+    assert user.return_id == "RET-2025-00006"
+    status = storage.get_refund_status(user.return_id, user.tax_year)
+    assert status is not None
+    assert status.status_code == storage.StatusCode.APPROVED

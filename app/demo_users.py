@@ -99,6 +99,13 @@ DEMO_USERS: Dict[str, DemoUser] = {
         return_id="RET-2025-00005",
         tax_year=2025,
     ),
+    "user6": DemoUser(
+        user_id="user6",
+        name="Karen",
+        demo_label="Karen — Approved, past the predicted window",
+        return_id="RET-2025-00006",
+        tax_year=2025,
+    ),
 }
 
 DEFAULT_USER_ID = "user1"

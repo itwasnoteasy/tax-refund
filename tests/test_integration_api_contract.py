@@ -73,6 +73,21 @@ def test_refund_status_no_refund_pending_matches_contract(client, contract) -> N
     )
 
 
+def test_refund_status_approved_overdue_matches_contract(client, contract) -> None:
+    """RET-2025-00006's predicted_window is suppressed (null) once its
+    window has elapsed relative to status_last_updated_at -- a third,
+    non-terminal reason for a null predicted_window alongside the
+    no-refund-pending and paper-filed cases, still contract-valid.
+    """
+    response = client.get("/refund-status/RET-2025-00006", params={"tax_year": 2025})
+    assert response.status_code == 200
+    assert response.json()["status_code"] == "APPROVED"
+    assert response.json()["predicted_window"] is None
+    assert_matches_schema(
+        response.json(), contract, "/refund-status/{return_id}", "get", "200"
+    )
+
+
 def test_refund_status_404_matches_contract(client, contract) -> None:
     response = client.get("/refund-status/RET-9999-99999", params={"tax_year": 2025})
     assert response.status_code == 404
@@ -169,14 +184,14 @@ def test_demo_clear_cache_endpoint_forces_next_lookup_to_be_a_miss(client) -> No
     assert cache_layer.get_fresh_cached_data("RET-2025-00001", 2025) is None
 
 
-def test_demo_list_users_returns_all_five_seed_backed_users(client) -> None:
+def test_demo_list_users_returns_all_six_seed_backed_users(client) -> None:
     """Not in 03_API_CONTRACT.yaml -- backs the admin screen's "set
     active user" dropdown. Basic shape check only.
     """
     response = client.get("/demo/users")
     assert response.status_code == 200
     users = response.json()
-    assert len(users) == 5
+    assert len(users) == 6
     assert {"user_id", "name", "demo_label"} <= users[0].keys()
 
 
