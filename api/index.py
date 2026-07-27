@@ -20,10 +20,12 @@ authority FastAPI's OpenAPI output is checked against
 (test_integration_api_contract.py), not the other way around.
 """
 from datetime import date, datetime
+from pathlib import Path
 from typing import List, Literal, Optional
 
 from fastapi import APIRouter, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app import (
@@ -41,6 +43,30 @@ app = FastAPI(
     title="TurboTax Refund Status PoC API",
     version="0.1.0-poc",
 )
+
+# DECISION: static/ is mounted here, not only left to vercel.json's
+# @vercel/static build. On Vercel, vercel.json's "/static/(.*)" route
+# intercepts those paths before the request ever reaches this ASGI
+# app, so this mount is inert (never invoked) in that environment --
+# harmless, not redundant configuration to keep in sync. But a plain
+# local `uvicorn api.index:app` run has no such build step in front of
+# it, so without a real mount here, /static/index.html 404s locally
+# with nothing to explain why -- confirmed live: `uvicorn api.index:app`
+# run exactly as README.md instructs, hitting /static/index.html,
+# returned {"detail": "Not Found"}, since nothing served it. The path
+# is resolved relative to this file, not the process's working
+# directory, so `uvicorn api.index:app` behaves the same regardless of
+# which directory it's launched from. See DECISIONS.md.
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+app.mount("/static", StaticFiles(directory=_STATIC_DIR, html=True), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def _root() -> RedirectResponse:
+    """Mirrors vercel.json's "/$" -> "/static/index.html" route, so the
+    bare root URL works the same locally as it does on Vercel.
+    """
+    return RedirectResponse(url="/static/index.html")
 
 
 # --- Request/response models, mirroring 03_API_CONTRACT.yaml exactly ---
