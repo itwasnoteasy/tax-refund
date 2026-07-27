@@ -68,7 +68,22 @@
 
     <!-- Circuit breaker + mock IRS mode -->
     <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-      <h2 class="text-base font-semibold text-slate-900 mb-4">Mock IRS &amp; circuit breaker</h2>
+      <h2 class="text-base font-semibold text-slate-900 mb-2">Mock IRS &amp; circuit breaker</h2>
+
+      <!-- How this works -- the cache-aside flow, in plain language -->
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-3.5 mb-4">
+        <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">How this works</p>
+        <p class="text-xs text-slate-600 leading-relaxed">
+          Every "Check Refund Status" click first checks the cache (Vercel KV here — standing in for the
+          Redis-shaped cache the full design calls for), keyed by return + tax year. A cache hit returns
+          instantly, with no IRS call at all. A cache miss — the first check ever, or the TTL for that
+          return's filing method has elapsed — calls the mock IRS below. A successful call repopulates the
+          cache with a fresh TTL and resets the breaker's failure count to zero. A failing call increments
+          the breaker's <em>consecutive</em>-failure count; at 3 in a row the breaker opens and every
+          subsequent request is short-circuited straight to the last-known-good cached value, marked stale,
+          instead of calling the IRS again.
+        </p>
+      </div>
 
       <div class="rounded-xl p-3 mb-4" :class="breakerCardClasses()">
         <p class="text-[11px] font-semibold uppercase tracking-wide" :class="breakerTextClasses()">IRS Circuit Breaker</p>
@@ -85,6 +100,26 @@
           <option :value="m" x-text="m"></option>
         </template>
       </select>
+
+      <!-- Per-mode rubric -- updates live as the dropdown selection changes,
+           before "Apply mode" is even clicked, so the operator knows what
+           they're about to trigger. -->
+      <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-3.5 mb-2">
+        <p class="text-[11px] font-semibold uppercase tracking-wide text-indigo-500 mb-1.5" x-text="'If you apply ' + irsMode"></p>
+        <p class="text-xs text-indigo-900 leading-relaxed mb-2">
+          <span class="font-semibold">IRS / TurboTax server impact:</span>
+          <span x-text="modeRubric().serverImpact"></span>
+        </p>
+        <p class="text-xs text-indigo-900 leading-relaxed mb-2">
+          <span class="font-semibold">Circuit breaker:</span>
+          <span x-text="modeRubric().breakerImpact"></span>
+        </p>
+        <p class="text-xs text-indigo-900 leading-relaxed">
+          <span class="font-semibold">Customer experience:</span>
+          <span x-text="modeRubric().customerExperience"></span>
+        </p>
+      </div>
+
       <button @click="setIrsMode()" :disabled="settingMode"
               class="w-full rounded-xl bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white text-sm font-semibold px-4 py-2 transition mb-2">
         <span x-text="settingMode ? 'Applying…' : 'Apply mode'"></span>
@@ -121,6 +156,58 @@ function admin() {
     breakerState: 'CLOSED',
     clearingCache: false,
     cacheClearedNotice: false,
+
+    // DECISION: hardcoded copy, not sourced from the backend. This
+    // rubric describes *design intent* (what each mode is supposed to
+    // demonstrate, per 02_TECHNICAL_DESIGN.md §2's table), which is
+    // documentation, not runtime state -- there is no live "why" for
+    // the API to return alongside a mode string. See DECISIONS.md.
+    modeRubricData: {
+      NORMAL: {
+        serverImpact: 'The mock IRS responds immediately and successfully -- the healthy-dependency baseline every other mode is a deviation from.',
+        breakerImpact: 'A success always resets the consecutive-failure count to zero and keeps (or returns) the breaker to CLOSED.',
+        customerExperience: 'Fast, fresh status on a cache miss; instant on a cache hit. stale: false either way.',
+      },
+      FAILING: {
+        serverImpact: 'Simulates a connection error / 503 from the IRS -- every call while this mode is active fails outright.',
+        breakerImpact: 'Counts toward the consecutive-failure threshold. 3 in a row (from a cold cache) trips CLOSED → OPEN.',
+        customerExperience: 'Once OPEN, the customer never waits on a doomed IRS call again -- they see the last-known-good cached value immediately, honestly marked stale with an "as of" timestamp. Never a broken page.',
+      },
+      FLAPPING: {
+        serverImpact: 'Alternates success/failure on every call, deterministically -- an intermittently healthy dependency, not a fully down one.',
+        breakerImpact: 'Never opens: a success always arrives before 3 consecutive failures can accumulate, resetting the count each time. This is the mode that proves the breaker counts CONSECUTIVE failures, not cumulative ones.',
+        customerExperience: 'Every cache miss still eventually succeeds -- normal status, never a stale banner, though a miss may take one extra retry’s worth of latency under the hood.',
+      },
+      SLOW: {
+        serverImpact: 'The mock IRS responds successfully, just after a multi-second delay -- a latency problem, not a connectivity one.',
+        breakerImpact: 'Does not touch the breaker at all -- a slow-but-working dependency is never treated as a failure.',
+        customerExperience: 'A longer loading spinner, then a real, fresh answer -- never treated as an error or shown a stale fallback.',
+      },
+      TIMEOUT: {
+        serverImpact: 'The call hangs past a defined ceiling instead of returning a clean error response -- a genuinely different failure shape from FAILING (a hang vs. an explicit rejection).',
+        breakerImpact: 'Counts toward the consecutive-failure threshold identically to FAILING.',
+        customerExperience: 'Indistinguishable from FAILING once the breaker opens: a calm, honestly-labeled stale fallback, not a hung page.',
+      },
+      MALFORMED_RESPONSE: {
+        serverImpact: 'The IRS returns a 200-shaped response, but with schema-invalid data (a missing field or wrong type) -- it answered, just not usably.',
+        breakerImpact: 'Counts toward the breaker: data that can’t be trusted is treated the same as an unreachable IRS for reliability purposes.',
+        customerExperience: 'Never sees the malformed data -- it’s quarantined server-side before being served. Same stale-fallback treatment as any other failure once the breaker opens.',
+      },
+      UNKNOWN_STATUS_CODE: {
+        serverImpact: 'The IRS returns a status code outside this system’s normalization map -- e.g. a brand-new code nobody’s added yet. The connection itself works fine.',
+        breakerImpact: 'Does NOT count toward the breaker -- this is a normalization-map gap, not a reliability problem, so it shouldn’t make the breaker distrust a healthy connection.',
+        customerExperience: 'This one request falls back to the last-known-good cached value (flagged server-side for human review) rather than guessing what the new code means -- but the breaker itself doesn’t move, so the very next request tries the IRS again normally.',
+      },
+      RATE_LIMITED: {
+        serverImpact: 'Simulates the IRS returning a 429-equivalent -- reachable, but asking callers to back off.',
+        breakerImpact: 'Does NOT count toward the breaker -- retrying immediately (which a breaker trip would eventually invite) would make a rate-limit problem worse, not better, so this is deliberately handled as its own outcome.',
+        customerExperience: 'Falls back to the last-known-good cached value for this request, same as any other non-success outcome, without the system hammering the IRS in response.',
+      },
+    },
+
+    modeRubric() {
+      return this.modeRubricData[this.irsMode] || { serverImpact: '', breakerImpact: '', customerExperience: '' };
+    },
 
     async init() {
       const [usersRes, activeRes] = await Promise.all([
