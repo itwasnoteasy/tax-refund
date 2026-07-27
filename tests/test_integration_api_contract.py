@@ -169,6 +169,43 @@ def test_demo_clear_cache_endpoint_forces_next_lookup_to_be_a_miss(client) -> No
     assert cache_layer.get_fresh_cached_data("RET-2025-00001", 2025) is None
 
 
+def test_demo_list_users_returns_all_five_seed_backed_users(client) -> None:
+    """Not in 03_API_CONTRACT.yaml -- backs the admin screen's "set
+    active user" dropdown. Basic shape check only.
+    """
+    response = client.get("/demo/users")
+    assert response.status_code == 200
+    users = response.json()
+    assert len(users) == 5
+    assert {"user_id", "name", "demo_label"} <= users[0].keys()
+
+
+def test_demo_active_user_defaults_to_user1_when_never_set(client) -> None:
+    response = client.get("/demo/active-user")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["user_id"] == "user1"
+    assert body["return_id"] == "RET-2025-00001"
+    assert body["filing_description"] == "e-file with direct deposit"
+    assert body["status_last_updated_at"] is not None
+
+
+def test_demo_set_active_user_changes_what_active_user_returns(client) -> None:
+    set_response = client.post("/demo/set-active-user", json={"user_id": "user4"})
+    assert set_response.status_code == 200
+    assert set_response.json()["return_id"] == "RET-2025-00004"
+    assert set_response.json()["filing_description"] == "paper-filed return"
+
+    get_response = client.get("/demo/active-user")
+    assert get_response.json()["user_id"] == "user4"
+
+
+def test_demo_set_active_user_rejects_unknown_user_with_400(client) -> None:
+    response = client.post("/demo/set-active-user", json={"user_id": "not-a-real-user"})
+    assert response.status_code == 400
+    assert response.json()["error"] == "unknown_demo_user"
+
+
 def test_docs_and_openapi_json_are_reachable(client) -> None:
     """The closest local proxy available for "does /docs work" without
     an actual Vercel deployment: runs the exact same ASGI app object

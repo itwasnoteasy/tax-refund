@@ -26,7 +26,15 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app import cache_layer, irs_integration, mock_irs, notifications, refund_status, storage
+from app import (
+    cache_layer,
+    demo_users,
+    irs_integration,
+    mock_irs,
+    notifications,
+    refund_status,
+    storage,
+)
 from app.help_assistant import graph as help_assistant_graph
 
 app = FastAPI(
@@ -112,6 +120,25 @@ class CircuitBreakerStatusModel(BaseModel):
     state: Literal["CLOSED", "OPEN", "HALF_OPEN"]
 
 
+class DemoUserModel(BaseModel):
+    user_id: str
+    name: str
+    demo_label: str
+
+
+class SetActiveUserRequestModel(BaseModel):
+    user_id: str
+
+
+class ActiveUserModel(BaseModel):
+    user_id: str
+    name: str
+    return_id: str
+    tax_year: int
+    filing_description: str
+    status_last_updated_at: Optional[datetime] = None
+
+
 # --- HTTP-layer-specific errors (not domain concepts -- these exist to
 # map onto 03_API_CONTRACT.yaml's declared error responses) ------------
 
@@ -170,6 +197,16 @@ async def _invalid_tax_year_handler(
     return JSONResponse(
         status_code=400,
         content=ErrorResponse(error="invalid_tax_year", detail=str(exc)).model_dump(),
+    )
+
+
+@app.exception_handler(demo_users.UnknownDemoUserError)
+async def _unknown_demo_user_handler(
+    request: Request, exc: demo_users.UnknownDemoUserError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content=ErrorResponse(error="unknown_demo_user", detail=str(exc)).model_dump(),
     )
 
 
@@ -317,6 +354,61 @@ def clear_cache(payload: ClearCacheRequestModel) -> dict:
     """
     cache_layer.clear_cache(payload.return_id, payload.tax_year)
     return {"return_id": payload.return_id, "tax_year": payload.tax_year, "cleared": True}
+
+
+@demo_router.get("/users", response_model=List[DemoUserModel])
+def list_demo_users() -> List[DemoUserModel]:
+    """[Demo control only] List every demo user, for the admin screen's
+    "set active user" dropdown.
+
+    Not in 03_API_CONTRACT.yaml -- see app/demo_users.py's module
+    docstring for why this directory exists as demo scaffolding,
+    separate from storage.TaxReturn.
+    """
+    return [
+        DemoUserModel(user_id=u.user_id, name=u.name, demo_label=u.demo_label)
+        for u in demo_users.list_demo_users()
+    ]
+
+
+@demo_router.get("/active-user", response_model=ActiveUserModel)
+def get_active_user() -> ActiveUserModel:
+    """[Demo control only] Read the currently active demo user.
+
+    The customer screen calls this (alongside the real
+    /refund-status/{return_id} lookup) each time "Check Refund Status"
+    is clicked, so it always reflects whichever user the admin screen
+    most recently selected -- see app/demo_users.py's module docstring
+    for the single-shared-instance trade-off this implies.
+    """
+    return _active_user_model()
+
+
+@demo_router.post("/set-active-user", response_model=ActiveUserModel)
+def set_active_user(payload: SetActiveUserRequestModel) -> ActiveUserModel:
+    """[Demo control only] Set which demo user is currently active.
+
+    Not in 03_API_CONTRACT.yaml -- the admin screen's counterpart to
+    /demo/set-irs-mode, for the same reason: a real client would never
+    call this.
+    """
+    demo_users.set_active_user_id(payload.user_id)
+    return _active_user_model()
+
+
+def _active_user_model() -> ActiveUserModel:
+    user_id = demo_users.get_active_user_id()
+    user = demo_users.DEMO_USERS[user_id]
+    tax_return = storage.get_tax_return(user.return_id, user.tax_year)
+    status = storage.get_refund_status(user.return_id, user.tax_year)
+    return ActiveUserModel(
+        user_id=user.user_id,
+        name=user.name,
+        return_id=user.return_id,
+        tax_year=user.tax_year,
+        filing_description=demo_users.filing_description(tax_return),
+        status_last_updated_at=status.status_last_updated_at if status else None,
+    )
 
 
 app.include_router(refund_status_router)

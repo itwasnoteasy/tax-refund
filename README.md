@@ -12,9 +12,12 @@ pip install -r requirements-dev.txt   # includes requirements.txt + pytest/uvico
 uvicorn api.index:app --reload --port 8000
 ```
 
-Then open:
-- `http://127.0.0.1:8000/static/index.html` — the frontend (control panel, refund-status demo, Tax Help Assistant)
+Then open, ideally in two tabs side by side:
+- `http://127.0.0.1:8000/static/index.html` — the **customer screen**: Check Refund Status, notifications, Tax Help Assistant. This is what an end user would actually see; it carries no demo controls.
+- `http://127.0.0.1:8000/static/admin.html` — the **demo control panel**: pick which demo user is "logged in," set the mock IRS mode, watch the live circuit breaker state, force a cache miss. Not part of the product surface — see `DECISIONS.md`'s "Frontend: split into static/index.html (customer) and static/admin.html (demo control)" entry for why these are separate pages rather than one screen with an `<aside>`.
 - `http://127.0.0.1:8000/docs` — interactive OpenAPI docs
+
+Both pages talk to the same backend, so changes made on the admin page (active user, mock IRS mode) take effect on the customer page the next time it's used — there's no cross-tab JavaScript wiring involved, just two pages hitting the same API.
 
 **No Vercel KV needed locally.** `app/kv_store.py` auto-detects the missing `KV_REST_API_URL`/`KV_REST_API_TOKEN` env vars and falls back to an in-process in-memory store — this is why the app "just works" with zero setup, but also means cache/circuit-breaker/demo-mode state resets every time you restart the server, and (unlike on Vercel) is shared correctly across requests within a single local process.
 
@@ -44,13 +47,14 @@ pytest -q                               # everything, for a quick sanity check
 The app auto-deploys from the `claude/repo-permission-test-o9tdfc` branch (confirm this is still the branch Vercel is watching under Project Settings → Git). After every push, verify **on the live URL itself**, not just locally — `CLAUDE.md`'s central warning is that Vercel's serverless execution model (no shared memory across invocations, Vercel KV instead of an in-memory dict, a hard 10s/1024MB ceiling) can make local and live behavior genuinely diverge in ways no local test can catch. Concretely, this has already happened once: a `vercel.json` build-config gap left `static/index.html` returning 404 live despite working fine locally (see `DECISIONS.md`'s "vercel.json: added a @vercel/static build" entry) — a category of bug only a real deployment check can surface.
 
 Checklist for each deploy:
-1. **`GET https://<your-project>.vercel.app/`** and **`/static/index.html`** — both should load the frontend (the `/` route redirects to the same page).
+1. **`GET https://<your-project>.vercel.app/`, `/static/index.html`, and `/static/admin.html`** — all three should load (the `/` route redirects to the customer screen).
 2. **`GET /docs`** — OpenAPI docs render.
 3. **`GET /refund-status/RET-2025-00001?tax_year=2025`** — returns a normal, fresh (`stale: false`) response.
-4. **Set mock IRS mode to `FAILING` via the demo control panel, then check status 3 times** — the circuit breaker indicator should flip to `OPEN` and the response should show `stale: true` with a real cached fallback. This specifically exercises Vercel KV, since the breaker's failure count and the cache's durable value both need to persist *across separate serverless invocations* — the one behavior the local in-memory fallback can't actually prove.
-5. **Set mode back to `NORMAL`, wait ~15s (the circuit breaker's cooldown), check status again** — the indicator should show `HALF_OPEN` briefly, then `CLOSED` on success.
-6. **Ask the Tax Help Assistant a well-covered question** (e.g. "where is my refund") — with `GEMINI_API_KEY` set in Vercel's project env vars, this should return a real synthesized answer, sources, and a confidence score, not the local extractive fallback.
-7. **Check Vercel's function logs** for anything unexpected — `graph.py`'s retrieval/synthesis/guardrail failure paths all log a `logger.warning(...)` with the real underlying error (including the Gemini API's response body) even though the user-facing response degrades gracefully, so this is the fastest way to diagnose a live-only failure without reproducing it locally.
+4. **On `admin.html`, set mock IRS mode to `FAILING`, then go to `index.html` and check status 3 times** — the admin screen's circuit breaker indicator should flip to `OPEN` and the customer screen's response should show a stale banner with a real cached fallback. This specifically exercises Vercel KV, since the breaker's failure count, the cache's durable value, and the active-user selection all need to persist *across separate serverless invocations* — the one behavior the local in-memory fallback can't actually prove.
+5. **Set mode back to `NORMAL` on `admin.html`, wait ~15s (the circuit breaker's cooldown), check status again on `index.html`** — the indicator should show `HALF_OPEN` briefly, then `CLOSED` on success.
+6. **On `admin.html`, switch the active demo user (e.g. to Susan, the paper-filed one), then check status on `index.html`** — the customer screen should greet the new name and reflect that user's return, confirming the two pages are actually sharing state through the backend, not just coincidentally showing the same default.
+7. **Ask the Tax Help Assistant a well-covered question** (e.g. "where is my refund") — with `GEMINI_API_KEY` set in Vercel's project env vars, this should return a real synthesized answer, sources, and a confidence score, not the local extractive fallback.
+8. **Check Vercel's function logs** for anything unexpected — `graph.py`'s retrieval/synthesis/guardrail failure paths all log a `logger.warning(...)` with the real underlying error (including the Gemini API's response body) even though the user-facing response degrades gracefully, so this is the fastest way to diagnose a live-only failure without reproducing it locally.
 
 ## What each `DEMO_WALKTHROUGH_SCRIPT.md` beat demonstrates
 
@@ -83,7 +87,7 @@ The full live-narration script is in `docs/spec/DEMO_WALKTHROUGH_SCRIPT.md`; thi
 17. An out-of-corpus question — the confidence gate declines honestly rather than forcing an answer.
 18. A simulated LLM failure — a calm "temporarily unavailable" state, never a broken page.
 
-**Demo control panel** (not part of the product surface — see `06_SCOPE.md`): drives every mode switch above, shows the circuit breaker's live CLOSED/OPEN/HALF_OPEN state, and has a "force cache miss" button that clears only the freshness marker (not the durable fallback), so it can be used right before demoing a failure mode without destroying the data that failure mode needs to show.
+**Demo control panel** (`static/admin.html`, not part of the product surface — see `06_SCOPE.md`): picks which demo user is active (all customer tabs reflect this one, shared instance), drives every mode switch above, shows the circuit breaker's live CLOSED/OPEN/HALF_OPEN state, and has a "force cache miss" button that clears only the freshness marker (not the durable fallback), so it can be used right before demoing a failure mode without destroying the data that failure mode needs to show.
 
 ## Project layout
 
@@ -91,9 +95,16 @@ The full live-narration script is in `docs/spec/DEMO_WALKTHROUGH_SCRIPT.md`; thi
 api/index.py            FastAPI app, routes, Pydantic models mirroring 03_API_CONTRACT.yaml
 app/                     Core logic: storage, cache_layer, irs_integration, mock_irs,
                           refund_logic, refund_status, notifications, audit, kv_store
+app/demo_users.py         Demo-only named-user directory (John, Maria, ...), mapped onto
+                          storage.py's seed returns -- backs the two-screen demo split
 app/help_assistant/       The separate RAG feature: retrieval.py (hybrid search), graph.py
                           (LangGraph orchestration), faq_corpus.py
-static/index.html         The entire frontend — Tailwind + Alpine.js via CDN, no build step
+static/index.html         The customer screen -- Check Refund Status, notifications,
+                          Tax Help Assistant. No demo controls.
+static/admin.html         The demo control panel -- active user, mock IRS mode, circuit
+                          breaker indicator, force cache miss. Not part of the product.
+static/shared.js           Formatting helpers shared by both pages (Tailwind + Alpine.js
+                            are still loaded via CDN in each page -- no build step, ever)
 docs/spec/                 The authoritative spec set — read this before the code
 tests/                    test_unit_*.py (Layer 1), test_integration_*.py (Layer 2 + 3)
 DECISIONS.md              Every non-obvious implementation choice, with its honest gap

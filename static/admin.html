@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ClearRefund — Demo Control Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+  body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
+  [x-cloak] { display: none !important; }
+  .fade-in { animation: fadeIn .25s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+<div x-data="admin()" x-init="init()" x-cloak>
+
+  <!-- ============ HEADER ============ -->
+  <header class="bg-white/90 backdrop-blur border-b border-slate-200 sticky top-0 z-30">
+    <div class="max-w-2xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-2.5">
+        <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+        <span class="text-xl font-extrabold tracking-tight text-slate-900">Demo Control Panel</span>
+      </div>
+      <a href="/static/index.html" class="text-xs font-medium text-slate-400 hover:text-slate-600 underline">Customer screen &rarr;</a>
+    </div>
+  </header>
+
+  <main class="max-w-2xl mx-auto px-6 py-8 space-y-6">
+
+    <div class="bg-amber-50 border border-amber-200 rounded-2xl px-5 py-3.5">
+      <p class="text-sm text-amber-900">
+        Not part of the real product — this page drives the live demo only. Changes made here
+        affect every open customer screen immediately, since this demo runs as a single shared
+        instance (one active user, one mock IRS mode, one circuit breaker) rather than per-visitor
+        state. See <span class="font-mono">DECISIONS.md</span>.
+      </p>
+    </div>
+
+    <!-- Active demo user -->
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <h2 class="text-base font-semibold text-slate-900 mb-1">Active demo user</h2>
+      <p class="text-sm text-slate-400 mb-4">
+        Whoever is selected here is who the customer screen "logs in" as the next time
+        someone clicks Check Refund Status there.
+      </p>
+      <div class="flex flex-col sm:flex-row gap-3">
+        <select x-model="selectedUserId" class="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent">
+          <template x-for="u in users" :key="u.user_id">
+            <option :value="u.user_id" x-text="u.demo_label"></option>
+          </template>
+        </select>
+        <button @click="setActiveUser()" :disabled="settingUser || !selectedUserId"
+                class="rounded-xl bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white text-sm font-semibold px-5 py-2.5 transition">
+          <span x-text="settingUser ? 'Setting…' : 'Set active user'"></span>
+        </button>
+      </div>
+      <p x-show="activeUser" x-cloak class="text-xs text-slate-500 mt-3">
+        Currently active: <span class="font-semibold text-slate-700" x-text="activeUser && activeUser.name"></span>
+        (<span class="font-mono" x-text="activeUser && activeUser.return_id"></span>)
+      </p>
+    </div>
+
+    <!-- Circuit breaker + mock IRS mode -->
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <h2 class="text-base font-semibold text-slate-900 mb-4">Mock IRS &amp; circuit breaker</h2>
+
+      <div class="rounded-xl p-3 mb-4" :class="breakerCardClasses()">
+        <p class="text-[11px] font-semibold uppercase tracking-wide" :class="breakerTextClasses()">IRS Circuit Breaker</p>
+        <div class="flex items-center gap-2 mt-1">
+          <span class="w-2.5 h-2.5 rounded-full" :class="breakerDotClasses()"></span>
+          <span class="text-sm font-bold" :class="breakerTextClasses()" x-text="breakerState"></span>
+        </div>
+        <p class="text-xs mt-1" :class="breakerTextClasses()" x-text="breakerDescription()"></p>
+      </div>
+
+      <label class="block text-xs font-medium text-slate-500 mb-1">Mock IRS mode</label>
+      <select x-model="irsMode" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent">
+        <template x-for="m in irsModes" :key="m">
+          <option :value="m" x-text="m"></option>
+        </template>
+      </select>
+      <button @click="setIrsMode()" :disabled="settingMode"
+              class="w-full rounded-xl bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white text-sm font-semibold px-4 py-2 transition mb-2">
+        <span x-text="settingMode ? 'Applying…' : 'Apply mode'"></span>
+      </button>
+
+      <button @click="forceCacheMiss()" :disabled="!activeUser || clearingCache"
+              class="w-full rounded-xl border border-slate-200 hover:bg-slate-50 disabled:text-slate-300 text-slate-700 text-sm font-medium px-4 py-2 transition">
+        <span x-text="clearingCache ? 'Clearing…' : 'Force cache miss (active user\'s return)'"></span>
+      </button>
+      <p x-show="cacheClearedNotice" x-cloak class="text-xs text-emerald-600 mt-2 fade-in">Cache cleared — next check hits the IRS.</p>
+
+      <div class="mt-4 pt-4 border-t border-slate-100">
+        <p class="text-[11px] text-slate-400 leading-relaxed">
+          Try: set mode to <span class="font-mono">FAILING</span>, force a cache miss, then go to the
+          customer screen and check status 3 times in a row to watch the breaker open. Set back to
+          <span class="font-mono">NORMAL</span> and check again after ~15s to watch it recover.
+        </p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+function admin() {
+  return {
+    users: [],
+    selectedUserId: '',
+    activeUser: null,
+    settingUser: false,
+
+    irsMode: 'NORMAL',
+    irsModes: ['NORMAL', 'FAILING', 'FLAPPING', 'SLOW', 'TIMEOUT', 'MALFORMED_RESPONSE', 'UNKNOWN_STATUS_CODE', 'RATE_LIMITED'],
+    settingMode: false,
+    breakerState: 'CLOSED',
+    clearingCache: false,
+    cacheClearedNotice: false,
+
+    async init() {
+      const [usersRes, activeRes] = await Promise.all([
+        fetch('/demo/users'),
+        fetch('/demo/active-user'),
+      ]);
+      this.users = usersRes.ok ? await usersRes.json() : [];
+      if (activeRes.ok) {
+        this.activeUser = await activeRes.json();
+        this.selectedUserId = this.activeUser.user_id;
+      }
+      this.pollBreakerState();
+      setInterval(() => this.pollBreakerState(), 4000);
+    },
+
+    async setActiveUser() {
+      if (!this.selectedUserId) return;
+      this.settingUser = true;
+      try {
+        const res = await fetch('/demo/set-active-user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: this.selectedUserId }),
+        });
+        if (res.ok) this.activeUser = await res.json();
+      } finally {
+        this.settingUser = false;
+      }
+    },
+
+    async setIrsMode() {
+      this.settingMode = true;
+      try {
+        await fetch('/demo/set-irs-mode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: this.irsMode }),
+        });
+        await this.pollBreakerState();
+      } finally {
+        this.settingMode = false;
+      }
+    },
+
+    async forceCacheMiss() {
+      if (!this.activeUser) return;
+      this.clearingCache = true;
+      this.cacheClearedNotice = false;
+      try {
+        await fetch('/demo/clear-cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ return_id: this.activeUser.return_id, tax_year: this.activeUser.tax_year }),
+        });
+        this.cacheClearedNotice = true;
+        setTimeout(() => (this.cacheClearedNotice = false), 4000);
+      } finally {
+        this.clearingCache = false;
+      }
+    },
+
+    async pollBreakerState() {
+      try {
+        const res = await fetch('/demo/circuit-breaker-status');
+        if (!res.ok) return;
+        const data = await res.json();
+        this.breakerState = data.state;
+      } catch (e) {
+        // Keep the last known value rather than breaking the UI over a
+        // polling hiccup -- this indicator is a convenience, not core.
+      }
+    },
+
+    breakerDotClasses() {
+      return {
+        CLOSED: 'bg-emerald-500',
+        OPEN: 'bg-red-500',
+        HALF_OPEN: 'bg-amber-500',
+      }[this.breakerState] || 'bg-slate-400';
+    },
+    breakerCardClasses() {
+      return {
+        CLOSED: 'bg-emerald-50 border border-emerald-200',
+        OPEN: 'bg-red-50 border border-red-200',
+        HALF_OPEN: 'bg-amber-50 border border-amber-200',
+      }[this.breakerState] || 'bg-slate-50 border border-slate-200';
+    },
+    breakerTextClasses() {
+      return {
+        CLOSED: 'text-emerald-700',
+        OPEN: 'text-red-700',
+        HALF_OPEN: 'text-amber-700',
+      }[this.breakerState] || 'text-slate-600';
+    },
+    breakerDescription() {
+      return {
+        CLOSED: 'Healthy — calling the IRS normally.',
+        OPEN: 'Short-circuited — serving cached data, not calling the IRS.',
+        HALF_OPEN: 'Testing recovery with a single trial request.',
+      }[this.breakerState] || '';
+    },
+  };
+}
+</script>
+
+</body>
+</html>
