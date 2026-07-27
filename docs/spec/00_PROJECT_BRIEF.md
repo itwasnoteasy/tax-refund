@@ -2,11 +2,7 @@
 
 ## What this is
 
-A working proof-of-concept of a TurboTax-style refund status and AI-predicted ETA system. It exists to support:
-
-1. A 45-minute live system design presentation covering this exact system (finalized design in the companion `turbotax_design_learning.md`, entity model, and architecture diagrams — treat those as the authoritative design record this code implements)
-2. A 30-minute hands-on "Programming Fundamentals" round, where an interviewer will read this code and ask **why** specific implementation choices were made
-3. A 60-minute "Product Engineering + AI Proficiency" round with both an engineering assessor and an AI assessor, likely probing the prediction/explanation logic and the failure-handling design specifically
+A working proof-of-concept of a TurboTax-style refund status and AI-predicted ETA system.
 
 ## What this means for how you build it
 
