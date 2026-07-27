@@ -10,8 +10,6 @@ A working proof-of-concept of a TurboTax-style refund status and AI-predicted ET
 
 **The audience is senior engineers evaluating architectural judgment**, not end users evaluating a polished product. A visually clean demo matters (see `02_TECHNICAL_DESIGN.md` for the UI approach), but it exists to make the underlying engineering decisions visible and explainable, not to impress on looks alone.
 
-**If something in the spec is awkward or inconsistent to implement, say so explicitly** rather than silently working around it. That's valuable to discover now, not during the actual interview.
-
 ## The five things this PoC must be able to demonstrate live
 
 Each maps to a specific design decision made during the system's full design phase — the demo exists to make these decisions visible and defensible, not just to "work":
