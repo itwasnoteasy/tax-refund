@@ -345,8 +345,9 @@ def reset_seed_data() -> None:
 
 def _seed() -> None:
     """Populate the seed returns covering all six 05_ACCEPTANCE_CRITERIA.md
-    demo scenarios, plus two additional ones from DEMO_WALKTHROUGH_SCRIPT.md's
-    narration (paper-filed, SENT) added for the frontend build -- see
+    demo scenarios, plus three additional ones from
+    DEMO_WALKTHROUGH_SCRIPT.md's narration (paper-filed, SENT, and an
+    approved-but-overdue return) added for the frontend build -- see
     DECISIONS.md.
 
     Three of the five returns are enough for the six-row acceptance
@@ -415,6 +416,24 @@ def _seed() -> None:
         ssn="567-89-0123",
         bank_account_number="000567890123",
     )
+    # DECISION: approved, EFILE_CURRENT_YEAR, status_last_updated_at set
+    # far enough in the past (well beyond APPROVED's 7-14 day predicted
+    # window, see refund_logic.py's _WINDOW_DAYS_BY_STATUS) that the
+    # window has already elapsed no matter when this demo is actually
+    # run -- a hardcoded past date only ever gets further in the past,
+    # never un-expires. Backs the "predicted window has passed, status
+    # still Approved" scenario -- see DECISIONS.md for the matching
+    # refund_status.py change this scenario depends on.
+    approved_overdue_return = TaxReturn(
+        return_id="RET-2025-00006",
+        tax_year=2025,
+        filing_status="single",
+        filing_method=FilingMethod.EFILE_CURRENT_YEAR,
+        expected_refund_amount=3120.00,
+        has_eitc_ctc_flag=False,
+        ssn="678-90-1234",
+        bank_account_number="000678901234",
+    )
 
     for tax_return in (
         normal_return,
@@ -422,6 +441,7 @@ def _seed() -> None:
         balance_due_return,
         paper_filed_return,
         sent_return,
+        approved_overdue_return,
     ):
         _TAX_RETURNS[(tax_return.return_id, tax_return.tax_year)] = tax_return
 
@@ -463,6 +483,14 @@ def _seed() -> None:
             tax_year=sent_return.tax_year,
             status_code=StatusCode.SENT,
             status_last_updated_at=datetime(2026, 7, 15, 11, 0, 0),
+        )
+    )
+    upsert_refund_status(
+        RefundStatus(
+            return_id=approved_overdue_return.return_id,
+            tax_year=approved_overdue_return.tax_year,
+            status_code=StatusCode.APPROVED,
+            status_last_updated_at=datetime(2026, 6, 1, 8, 0, 0),
         )
     )
 

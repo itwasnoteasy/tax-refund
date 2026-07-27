@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <script src="https://cdn.tailwindcss.com"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<script src="/static/shared.js"></script>
 <style>
   body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
   [x-cloak] { display: none !important; }
@@ -20,11 +21,11 @@
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen">
 
-<div x-data="app()" x-init="init()" x-cloak>
+<div x-data="app()" x-cloak>
 
   <!-- ============ HEADER ============ -->
   <header class="bg-white/90 backdrop-blur border-b border-slate-200 sticky top-0 z-30">
-    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+    <div class="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
       <div class="flex items-center gap-2.5">
         <svg class="w-8 h-8 text-emerald-600" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.6"/>
@@ -33,273 +34,213 @@
         <span class="text-xl font-extrabold tracking-tight text-slate-900">ClearRefund</span>
         <span class="hidden sm:inline text-xs font-medium text-slate-400 ml-1 mt-1">refund status, honestly explained</span>
       </div>
-      <div class="flex items-center gap-2 text-xs text-slate-400">
-        <span class="hidden md:inline">Proof of concept</span>
-        <span class="w-1 h-1 rounded-full bg-slate-300 hidden md:inline"></span>
-        <span>No account needed</span>
+      <div class="flex items-center gap-3 text-xs text-slate-400">
+        <span x-show="activeUser" x-cloak class="text-sm font-semibold text-slate-700">
+          Welcome, <span x-text="activeUser && activeUser.name"></span>
+        </span>
+        <!-- <span class="hidden md:inline">No account needed</span> -->
       </div>
     </div>
   </header>
 
-  <!-- ============ MAIN: REFUND STATUS CORE ============ -->
-  <main class="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+  <!-- ============ MAIN: REFUND STATUS CORE (customer-facing only --
+       the demo control panel lives on its own admin.html page now, see
+       DECISIONS.md) ============ -->
+  <main class="max-w-3xl mx-auto px-6 py-8 space-y-6">
 
-    <!-- LEFT / CENTER COLUMN -->
-    <section class="lg:col-span-2 space-y-6">
+    <!-- Empathy strip -->
+    <div class="bg-blue-50 border border-blue-100 rounded-2xl px-5 py-3.5 flex items-start gap-3">
+      <svg class="w-5 h-5 text-blue-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M12 9v4m0 4h.01M12 3l9 16H3L12 3z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <p class="text-sm text-blue-900 leading-relaxed">
+        We know waiting on a refund is stressful. Here's exactly what we know right now —
+        never a guess dressed up as a fact, and never something we're hiding from you.
+      </p>
+    </div>
 
-      <!-- Empathy strip -->
-      <div class="bg-blue-50 border border-blue-100 rounded-2xl px-5 py-3.5 flex items-start gap-3">
-        <svg class="w-5 h-5 text-blue-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M12 9v4m0 4h.01M12 3l9 16H3L12 3z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <p class="text-sm text-blue-900 leading-relaxed">
-          We know waiting on a refund is stressful. Here's exactly what we know right now —
-          never a guess dressed up as a fact, and never something we're hiding from you.
+    <!-- Check status card -->
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <h2 class="text-base font-semibold text-slate-900 mb-1">Check your refund status</h2>
+      <p class="text-sm text-slate-400 mb-4">We'll look up your most recent return automatically.</p>
+      <button @click="checkStatus()" :disabled="loading"
+              class="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-semibold px-5 py-2.5 transition">
+        <svg x-show="loading" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" stroke-opacity=".25"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+        <span x-text="loading ? 'Checking…' : 'Check Refund Status'"></span>
+      </button>
+      <span x-show="lastLatencyMs !== null && !loading" x-cloak class="ml-3 text-xs text-slate-400">
+        Response time: <span class="font-mono" x-text="lastLatencyMs + 'ms'"></span>
+      </span>
+    </div>
+
+    <!-- Error state -->
+    <div x-show="errorMessage" x-cloak class="fade-in bg-amber-50 border border-amber-200 rounded-2xl p-5 flex items-start gap-3">
+      <svg class="w-5 h-5 text-amber-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M12 9v4m0 4h.01M10.3 3.9L2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div>
+        <p class="text-sm font-semibold text-amber-900" x-text="errorMessage"></p>
+        <p class="text-xs text-amber-700 mt-1">Nothing is broken on your end — double-check the return and tax year, or try again in a moment.</p>
+      </div>
+    </div>
+
+    <!-- Result card -->
+    <div x-show="status" x-cloak class="fade-in bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-5">
+
+      <!-- Stale banner -->
+      <div x-show="status && status.stale" x-cloak class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-2.5">
+        <span class="relative flex h-2.5 w-2.5">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+        </span>
+        <p class="text-sm text-amber-800">
+          We're having trouble reaching the IRS right now, so we're showing the most recent information we have —
+          <span class="font-medium" x-text="'as of ' + formatDateTime(status && status.last_checked)"></span>.
         </p>
       </div>
 
-      <!-- Selector card -->
-      <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-        <h2 class="text-base font-semibold text-slate-900 mb-4">Check your refund status</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div class="sm:col-span-2">
-            <label class="block text-xs font-medium text-slate-500 mb-1">Return</label>
-            <select x-model="selectedScenario" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-              <template x-for="s in scenarios" :key="s.id">
-                <option :value="s.id" x-text="s.label"></option>
-              </template>
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs font-medium text-slate-500 mb-1">Tax year</label>
-            <select x-model.number="taxYear" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-              <template x-for="y in taxYears" :key="y">
-                <option :value="y" x-text="y"></option>
-              </template>
-            </select>
-          </div>
-        </div>
-
-        <div x-show="selectedScenario === '__custom__'" class="mt-3" x-cloak>
-          <label class="block text-xs font-medium text-slate-500 mb-1">Return ID</label>
-          <input type="text" x-model="customReturnId" placeholder="e.g. RET-2025-00001"
-                 class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
-        </div>
-
-        <button @click="checkStatus()" :disabled="loading || !activeReturnId"
-                class="mt-4 w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-semibold px-5 py-2.5 transition">
-          <svg x-show="loading" class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" stroke-opacity=".25"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
-          <span x-text="loading ? 'Checking…' : 'Check Status'"></span>
-        </button>
-        <span x-show="lastLatencyMs !== null && !loading" x-cloak class="ml-3 text-xs text-slate-400">
-          Response time: <span class="font-mono" x-text="lastLatencyMs + 'ms'"></span>
-        </span>
-      </div>
-
-      <!-- Error state -->
-      <div x-show="errorMessage" x-cloak class="fade-in bg-amber-50 border border-amber-200 rounded-2xl p-5 flex items-start gap-3">
-        <svg class="w-5 h-5 text-amber-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M12 9v4m0 4h.01M10.3 3.9L2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <div>
-          <p class="text-sm font-semibold text-amber-900" x-text="errorMessage"></p>
-          <p class="text-xs text-amber-700 mt-1">Nothing is broken on your end — double-check the return and tax year, or try again in a moment.</p>
+      <!-- Status badge row -->
+      <div class="flex items-center justify-between flex-wrap gap-3">
+        <div class="flex items-center gap-3">
+          <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold"
+                :class="statusBadgeClasses()" x-text="statusLabel()"></span>
+          <span class="text-sm text-slate-400" x-text="'Return ' + (status && status.return_id) + ' · ' + (status && status.tax_year)"></span>
         </div>
       </div>
 
-      <!-- Result card -->
-      <div x-show="status" x-cloak class="fade-in bg-white rounded-2xl shadow-sm border border-slate-100 p-6 space-y-5">
+      <!-- Acceptance line -- "Your e-file with direct deposit was accepted on ..." -->
+      <p x-show="acceptanceSentence()" x-cloak class="text-sm text-slate-500" x-text="acceptanceSentence()"></p>
 
-        <!-- Stale banner -->
-        <div x-show="status && status.stale" x-cloak class="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-2.5">
-          <span class="relative flex h-2.5 w-2.5">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
-          </span>
-          <p class="text-sm text-amber-800">
-            We're having trouble reaching the IRS right now, so we're showing the most recent information we have —
-            <span class="font-medium" x-text="'as of ' + formatDateTime(status && status.last_checked)"></span>.
-          </p>
-        </div>
+      <!-- Refund amount -->
+      <div x-show="status && status.expected_refund_amount !== null" x-cloak>
+        <p class="text-xs font-medium text-slate-500 mb-1">
+          <span x-show="status && status.status_code === 'SENT'">Refund sent</span>
+          <span x-show="status && status.status_code !== 'SENT'">Expected refund</span>
+        </p>
+        <p class="text-4xl font-extrabold text-emerald-600 tracking-tight" x-text="formatCurrency(status && status.expected_refund_amount)"></p>
+      </div>
 
-        <!-- Status badge row -->
-        <div class="flex items-center justify-between flex-wrap gap-3">
-          <div class="flex items-center gap-3">
-            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold"
-                  :class="statusBadgeClasses()" x-text="statusLabel()"></span>
-            <span class="text-sm text-slate-400" x-text="'Return ' + (status && status.return_id) + ' · ' + (status && status.tax_year)"></span>
-          </div>
-        </div>
-
-        <!-- Refund amount -->
-        <div x-show="status && status.expected_refund_amount !== null" x-cloak>
-          <p class="text-xs font-medium text-slate-500 mb-1">
-            <span x-show="status && status.status_code === 'SENT'">Refund sent</span>
-            <span x-show="status && status.status_code !== 'SENT'">Expected refund</span>
-          </p>
-          <p class="text-4xl font-extrabold text-emerald-600 tracking-tight" x-text="formatCurrency(status && status.expected_refund_amount)"></p>
-        </div>
-
-        <!-- Predicted window -->
-        <div x-show="status && status.predicted_window" x-cloak class="bg-slate-50 rounded-xl p-4">
-          <div class="flex items-center gap-1.5">
-            <p class="text-xs font-medium text-slate-500">Estimated delivery window</p>
-            <div class="relative">
-              <button @click="showWindowInfo = !showWindowInfo" @click.outside="showWindowInfo = false"
-                      class="w-4 h-4 rounded-full bg-slate-200 text-slate-500 text-[10px] font-bold hover:bg-slate-300 flex items-center justify-center">i</button>
-              <div x-show="showWindowInfo" x-cloak x-transition
-                   class="absolute z-10 left-0 top-6 w-64 bg-slate-800 text-slate-100 text-xs rounded-lg p-3 shadow-lg">
-                We show a range, not a single date, because refund timing genuinely varies.
-                This is our honest best estimate — not a guarantee, and never a countdown.
-              </div>
+      <!-- Predicted window -->
+      <div x-show="status && status.predicted_window" x-cloak class="bg-slate-50 rounded-xl p-4">
+        <div class="flex items-center gap-1.5">
+          <p class="text-xs font-medium text-slate-500">Estimated delivery window</p>
+          <div class="relative">
+            <button @click="showWindowInfo = !showWindowInfo" @click.outside="showWindowInfo = false"
+                    class="w-4 h-4 rounded-full bg-slate-200 text-slate-500 text-[10px] font-bold hover:bg-slate-300 flex items-center justify-center">i</button>
+            <div x-show="showWindowInfo" x-cloak x-transition
+                 class="absolute z-10 left-0 top-6 w-64 bg-slate-800 text-slate-100 text-xs rounded-lg p-3 shadow-lg">
+              We show a range, not a single date, because refund timing genuinely varies.
+              This is our honest best estimate — not a guarantee, and never a countdown.
             </div>
           </div>
-          <p class="text-lg font-semibold text-slate-800 mt-1">
-            <span x-text="formatDate(status && status.predicted_window && status.predicted_window.start_date)"></span>
-            &nbsp;–&nbsp;
-            <span x-text="formatDate(status && status.predicted_window && status.predicted_window.end_date)"></span>
-          </p>
         </div>
-
-        <!-- Explanation card -- styling varies by content, never alarming -->
-        <template x-if="status && status.status_code === 'NO_REFUND_PENDING'">
-          <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
-            <svg class="w-5 h-5 text-slate-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M12 8v4m0 4h.01M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <p class="text-sm text-slate-700">
-              This return shows a balance due rather than a refund this year — that's why there's no tracker
-              or delivery window above. This isn't an error; it's simply a different outcome than a refund.
-            </p>
-          </div>
-        </template>
-
-        <template x-if="status && status.filing_status !== undefined && isPaperFiled()">
-          <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
-            <svg class="w-5 h-5 text-slate-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-            <p class="text-sm text-slate-700">
-              This return was paper-filed, which routinely takes several weeks longer to show detailed status
-              than e-filing does — paper returns have to be manually opened and entered before processing
-              even begins. Limited detail right now is expected, not a sign anything's wrong.
-            </p>
-          </div>
-        </template>
-
-        <template x-if="status && status.status_code === 'SENT'">
-          <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-start gap-3">
-            <svg class="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <p class="text-sm text-emerald-800">
-              Your refund has been sent. If it doesn't show up in your account within about 5 business days,
-              check with your bank before assuming something's wrong.
-            </p>
-          </div>
-        </template>
-
-        <template x-if="status && status.explanation === 'still processing' && !isPaperFiled()">
-          <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
-            <svg class="w-5 h-5 text-slate-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
-            <p class="text-sm text-slate-700">
-              <span class="font-medium">Still processing.</span>
-              We don't have a specific reason for this stage, and we won't invent one — most returns move
-              through it within a few weeks. This is normal.
-            </p>
-          </div>
-        </template>
-
-        <template x-if="status && status.explanation && status.explanation.includes('PATH Act')">
-          <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-start gap-3">
-            <svg class="w-5 h-5 text-blue-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-            <p class="text-sm text-blue-900" x-text="status.explanation"></p>
-          </div>
-        </template>
-
-        <!-- Footer: last checked, always visible -->
-        <div class="pt-3 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
-          <p class="text-xs text-slate-400">
-            Last checked: <span x-text="formatDateTime(status && status.last_checked)"></span>
-          </p>
-          <p class="text-xs text-slate-400" x-show="status && status.filing_status">
-            Filing status: <span class="font-medium text-slate-500" x-text="status && status.filing_status"></span>
-          </p>
-        </div>
+        <p class="text-lg font-semibold text-slate-800 mt-1">
+          <span x-text="formatDate(status && status.predicted_window && status.predicted_window.start_date)"></span>
+          &nbsp;–&nbsp;
+          <span x-text="formatDate(status && status.predicted_window && status.predicted_window.end_date)"></span>
+        </p>
       </div>
 
-      <!-- Notifications -->
-      <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-base font-semibold text-slate-900">Status-change notifications</h2>
-          <label class="inline-flex items-center gap-2 cursor-pointer select-none">
-            <span class="text-xs text-slate-500">Channel</span>
-            <select x-model="notifChannel" class="rounded-lg border border-slate-200 bg-slate-50 text-xs px-2 py-1.5">
-              <option value="email">Email</option>
-              <option value="push">Push</option>
-            </select>
-          </label>
-        </div>
-        <div class="flex items-center gap-3 flex-wrap">
-          <button @click="optIn()" :disabled="optingIn || !activeReturnId"
-                  class="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white text-sm font-semibold px-4 py-2 transition">
-            <span x-text="notifOptedIn ? 'Opted in ✓' : 'Opt in to notifications'"></span>
-          </button>
-          <button @click="loadPreview()" :disabled="loadingPreview || !activeReturnId"
-                  class="inline-flex items-center gap-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold px-4 py-2 transition">
-            <span x-text="loadingPreview ? 'Loading preview…' : 'Preview notification email'"></span>
-          </button>
-        </div>
-        <div x-show="previewHtml" x-cloak class="fade-in mt-4">
-          <p class="text-xs text-slate-400 mb-2">
-            Preview only — no email is ever actually sent from this demo.
+      <!-- Explanation card -- styling varies by content, never alarming -->
+      <template x-if="status && status.status_code === 'NO_REFUND_PENDING'">
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <svg class="w-5 h-5 text-slate-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M12 8v4m0 4h.01M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <p class="text-sm text-slate-700">
+            This return shows a balance due rather than a refund this year — that's why there's no tracker
+            or delivery window above. This isn't an error; it's simply a different outcome than a refund.
           </p>
-          <iframe :srcdoc="previewHtml" class="w-full rounded-xl border border-slate-200" style="height: 300px;"></iframe>
         </div>
+      </template>
+
+      <template x-if="status && status.filing_status !== undefined && isPaperFiled()">
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <svg class="w-5 h-5 text-slate-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+          <p class="text-sm text-slate-700">
+            This return was paper-filed, which routinely takes several weeks longer to show detailed status
+            than e-filing does — paper returns have to be manually opened and entered before processing
+            even begins. Limited detail right now is expected, not a sign anything's wrong.
+          </p>
+        </div>
+      </template>
+
+      <template x-if="isWindowOverdue()">
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <svg class="w-5 h-5 text-slate-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <p class="text-sm text-slate-700">
+            Your refund is taking a little longer than typical — this happens and doesn't mean anything is wrong.
+          </p>
+        </div>
+      </template>
+
+      <template x-if="status && status.status_code === 'SENT'">
+        <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-start gap-3">
+          <svg class="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <p class="text-sm text-emerald-800">
+            Your refund has been sent. If it doesn't show up in your account within about 5 business days,
+            check with your bank before assuming something's wrong.
+          </p>
+        </div>
+      </template>
+
+      <template x-if="status && status.explanation === 'still processing' && !isPaperFiled() && !isWindowOverdue()">
+        <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <svg class="w-5 h-5 text-slate-400 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <p class="text-sm text-slate-700">
+            <span class="font-medium">Still processing.</span>
+            We don't have a specific reason for this stage, and we won't invent one — most returns move
+            through it within a few weeks. This is normal.
+          </p>
+        </div>
+      </template>
+
+      <template x-if="status && status.explanation && status.explanation.includes('PATH Act')">
+        <div class="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-start gap-3">
+          <svg class="w-5 h-5 text-blue-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+          <p class="text-sm text-blue-900" x-text="status.explanation"></p>
+        </div>
+      </template>
+
+      <!-- Footer: last checked, always visible -->
+      <div class="pt-3 border-t border-slate-100 flex items-center justify-between flex-wrap gap-2">
+        <p class="text-xs text-slate-400">
+          Last checked: <span x-text="formatDateTime(status && status.last_checked)"></span>
+        </p>
+        <p class="text-xs text-slate-400" x-show="status && status.filing_status">
+          Filing status: <span class="font-medium text-slate-500" x-text="status && status.filing_status"></span>
+        </p>
       </div>
-    </section>
+    </div>
 
-    <!-- RIGHT COLUMN: Demo control panel -->
-    <aside class="space-y-4 lg:sticky lg:top-24">
-      <div class="bg-white rounded-2xl shadow-sm border-2 border-dashed border-amber-300 p-5">
-        <div class="flex items-center gap-2 mb-1">
-          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
-          <h2 class="text-sm font-bold text-amber-700 tracking-wide uppercase">Demo Control Panel</h2>
-        </div>
-        <p class="text-xs text-slate-400 mb-4">Not part of the real product — drives the live demo only.</p>
-
-        <!-- Circuit breaker indicator -->
-        <div class="rounded-xl p-3 mb-4" :class="breakerCardClasses()">
-          <p class="text-[11px] font-semibold uppercase tracking-wide" :class="breakerTextClasses()">IRS Circuit Breaker</p>
-          <div class="flex items-center gap-2 mt-1">
-            <span class="w-2.5 h-2.5 rounded-full" :class="breakerDotClasses()"></span>
-            <span class="text-sm font-bold" :class="breakerTextClasses()" x-text="breakerState"></span>
-          </div>
-          <p class="text-xs mt-1" :class="breakerTextClasses()" x-text="breakerDescription()"></p>
-        </div>
-
-        <!-- Mock IRS mode -->
-        <label class="block text-xs font-medium text-slate-500 mb-1">Mock IRS mode</label>
-        <select x-model="irsMode" class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent">
-          <template x-for="m in irsModes" :key="m">
-            <option :value="m" x-text="m"></option>
-          </template>
-        </select>
-        <button @click="setIrsMode()" :disabled="settingMode"
-                class="w-full rounded-xl bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white text-sm font-semibold px-4 py-2 transition mb-2">
-          <span x-text="settingMode ? 'Applying…' : 'Apply mode'"></span>
+    <!-- Notifications -->
+    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-base font-semibold text-slate-900">Status-change notifications</h2>
+        <label class="inline-flex items-center gap-2 cursor-pointer select-none">
+          <span class="text-xs text-slate-500">Channel</span>
+          <select x-model="notifChannel" class="rounded-lg border border-slate-200 bg-slate-50 text-xs px-2 py-1.5">
+            <option value="email">Email</option>
+            <option value="push">Push</option>
+          </select>
+        </label>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button @click="optIn()" :disabled="optingIn || !activeUser"
+                class="inline-flex items-center gap-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white text-sm font-semibold px-4 py-2 transition">
+          <span x-text="notifOptedIn ? 'Opted in ✓' : 'Opt in to notifications'"></span>
         </button>
-
-        <!-- Force cache miss -->
-        <button @click="forceCacheMiss()" :disabled="!activeReturnId || clearingCache"
-                class="w-full rounded-xl border border-slate-200 hover:bg-slate-50 disabled:text-slate-300 text-slate-700 text-sm font-medium px-4 py-2 transition">
-          <span x-text="clearingCache ? 'Clearing…' : 'Force cache miss (this return)'"></span>
+        <button @click="loadPreview()" :disabled="loadingPreview || !activeUser"
+                class="inline-flex items-center gap-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-semibold px-4 py-2 transition">
+          <span x-text="loadingPreview ? 'Loading preview…' : 'Preview notification email'"></span>
         </button>
-        <p x-show="cacheClearedNotice" x-cloak class="text-xs text-emerald-600 mt-2 fade-in">Cache cleared — next check hits the IRS.</p>
-
-        <div class="mt-4 pt-4 border-t border-slate-100">
-          <p class="text-[11px] text-slate-400 leading-relaxed">
-            Try: set mode to <span class="font-mono">FAILING</span>, force a cache miss, then check status
-            3 times in a row to watch the breaker open. Set back to <span class="font-mono">NORMAL</span>
-            and check again after ~15s to watch it recover.
-          </p>
-        </div>
       </div>
-    </aside>
+      <p x-show="!activeUser" x-cloak class="text-xs text-slate-400 mt-3">Check your refund status first — notifications apply to that return.</p>
+      <div x-show="previewHtml" x-cloak class="fade-in mt-4">
+        <p class="text-xs text-slate-400 mb-2">
+          Preview only — no email is ever actually sent from this demo.
+        </p>
+        <iframe :srcdoc="previewHtml" class="w-full rounded-xl border border-slate-200" style="height: 300px;"></iframe>
+      </div>
+    </div>
   </main>
 
   <!-- ============ TAX HELP ASSISTANT — visually + structurally separate ============ -->
-  <section class="max-w-6xl mx-auto px-6 pb-10">
+  <section class="max-w-3xl mx-auto px-6 pb-10">
     <div class="bg-slate-900 rounded-2xl shadow-lg p-6 sm:p-8">
       <div class="flex items-center gap-2.5 mb-1">
         <svg class="w-6 h-6 text-violet-400" viewBox="0 0 24 24" fill="none"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4L12 2z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
@@ -355,39 +296,22 @@
     </div>
   </section>
 
-  <footer class="max-w-6xl mx-auto px-6 pb-10 text-center text-xs text-slate-400">
+  <footer class="max-w-3xl mx-auto px-6 pb-10 text-center text-xs text-slate-400">
     ClearRefund is a proof-of-concept demo. Not affiliated with the IRS or any tax preparation company.
+    <a href="/static/admin.html" class="underline hover:text-slate-500">Demo control panel</a>
   </footer>
 </div>
 
 <script>
 function app() {
   return {
-    scenarios: [
-      { id: 'RET-2025-00001', label: 'Normal Return — In Progress' },
-      { id: 'RET-2025-00002', label: 'EITC / Child Tax Credit Return' },
-      { id: 'RET-2025-00003', label: 'Balance Due (No Refund)' },
-      { id: 'RET-2025-00004', label: 'Paper-Filed Return' },
-      { id: 'RET-2025-00005', label: 'Refund Already Sent' },
-      { id: '__custom__', label: 'Custom Return ID…' },
-    ],
-    selectedScenario: 'RET-2025-00001',
-    customReturnId: '',
-    taxYear: 2025,
-    taxYears: [2025, 2024, 2023],
+    activeUser: null,
 
     loading: false,
     status: null,
     errorMessage: null,
     lastLatencyMs: null,
     showWindowInfo: false,
-
-    irsMode: 'NORMAL',
-    irsModes: ['NORMAL', 'FAILING', 'FLAPPING', 'SLOW', 'TIMEOUT', 'MALFORMED_RESPONSE', 'UNKNOWN_STATUS_CODE', 'RATE_LIMITED'],
-    settingMode: false,
-    breakerState: 'CLOSED',
-    clearingCache: false,
-    cacheClearedNotice: false,
 
     notifChannel: 'email',
     notifOptedIn: false,
@@ -405,26 +329,27 @@ function app() {
       'What is the Child Tax Credit?',
     ],
 
-    get activeReturnId() {
-      return this.selectedScenario === '__custom__'
-        ? this.customReturnId.trim()
-        : this.selectedScenario;
-    },
-
-    init() {
-      this.pollBreakerState();
-      setInterval(() => this.pollBreakerState(), 4000);
-    },
-
     async checkStatus() {
-      if (!this.activeReturnId) return;
       this.loading = true;
       this.errorMessage = null;
       this.status = null;
       const startedAt = performance.now();
       try {
+        // DECISION: fetched fresh on every click, not polled in the
+        // background -- the admin screen's "set active user" selection
+        // is what this demo treats as "who is logged in," and the
+        // customer screen only needs to know that at the moment it
+        // actually asks for a refund status, not continuously. See
+        // DECISIONS.md.
+        const userRes = await fetch('/demo/active-user');
+        if (!userRes.ok) {
+          this.errorMessage = 'Something went wrong reaching the server. Please try again.';
+          return;
+        }
+        this.activeUser = await userRes.json();
+
         const res = await fetch(
-          `/refund-status/${encodeURIComponent(this.activeReturnId)}?tax_year=${this.taxYear}`
+          `/refund-status/${encodeURIComponent(this.activeUser.return_id)}?tax_year=${this.activeUser.tax_year}`
         );
         this.lastLatencyMs = Math.round(performance.now() - startedAt);
         const data = await res.json();
@@ -437,100 +362,50 @@ function app() {
         this.errorMessage = 'Something went wrong reaching the server. Please try again.';
       } finally {
         this.loading = false;
-        // Poll immediately rather than waiting for the next 4s tick --
-        // this indicator matters most right after a click during the
-        // live circuit-breaker demo, where lag reads as "broken."
-        this.pollBreakerState();
       }
     },
 
     isPaperFiled() {
-      // The API doesn't expose filing_method directly (it's internal --
-      // see storage.py); the scenario picker's own selection is enough
-      // to know when this demo return is the paper-filed one.
-      return this.activeReturnId === 'RET-2025-00004' && this.status && this.status.status_code === 'RECEIVED';
+      return !!(this.activeUser && this.activeUser.filing_description === 'paper-filed return');
     },
 
-    async setIrsMode() {
-      this.settingMode = true;
-      try {
-        await fetch('/demo/set-irs-mode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode: this.irsMode }),
-        });
-        await this.pollBreakerState();
-      } finally {
-        this.settingMode = false;
-      }
+    isWindowOverdue() {
+      // DECISION: inferred from the response shape, not a dedicated
+      // API field -- predicted_window is null for exactly three
+      // reasons (terminal status, paper-filed, or the window has
+      // elapsed per refund_status.py's suppression logic); the other
+      // two are already distinguishable here (status_code, isPaperFiled()),
+      // so whatever's left over is the overdue case. See DECISIONS.md.
+      return !!(
+        this.status &&
+        this.status.predicted_window === null &&
+        this.status.status_code !== 'SENT' &&
+        this.status.status_code !== 'NO_REFUND_PENDING' &&
+        !this.isPaperFiled()
+      );
     },
 
-    async forceCacheMiss() {
-      if (!this.activeReturnId) return;
-      this.clearingCache = true;
-      this.cacheClearedNotice = false;
-      try {
-        await fetch('/demo/clear-cache', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ return_id: this.activeReturnId, tax_year: this.taxYear }),
-        });
-        this.cacheClearedNotice = true;
-        setTimeout(() => (this.cacheClearedNotice = false), 4000);
-      } finally {
-        this.clearingCache = false;
-      }
-    },
-
-    async pollBreakerState() {
-      try {
-        const res = await fetch('/demo/circuit-breaker-status');
-        if (!res.ok) return;
-        const data = await res.json();
-        this.breakerState = data.state;
-      } catch (e) {
-        // Keep the last known value rather than breaking the UI over a
-        // polling hiccup -- this indicator is a convenience, not core.
-      }
-    },
-
-    breakerDotClasses() {
-      return {
-        CLOSED: 'bg-emerald-500',
-        OPEN: 'bg-red-500',
-        HALF_OPEN: 'bg-amber-500',
-      }[this.breakerState] || 'bg-slate-400';
-    },
-    breakerCardClasses() {
-      return {
-        CLOSED: 'bg-emerald-50 border border-emerald-200',
-        OPEN: 'bg-red-50 border border-red-200',
-        HALF_OPEN: 'bg-amber-50 border border-amber-200',
-      }[this.breakerState] || 'bg-slate-50 border border-slate-200';
-    },
-    breakerTextClasses() {
-      return {
-        CLOSED: 'text-emerald-700',
-        OPEN: 'text-red-700',
-        HALF_OPEN: 'text-amber-700',
-      }[this.breakerState] || 'text-slate-600';
-    },
-    breakerDescription() {
-      return {
-        CLOSED: 'Healthy — calling the IRS normally.',
-        OPEN: 'Short-circuited — serving cached data, not calling the IRS.',
-        HALF_OPEN: 'Testing recovery with a single trial request.',
-      }[this.breakerState] || '';
+    acceptanceSentence() {
+      // "Your e-file with direct deposit was accepted on July 20, 2026." --
+      // filing_description and status_last_updated_at both come from
+      // /demo/active-user (demo-only, not 03_API_CONTRACT.yaml), never
+      // fabricated on the frontend. See app/demo_users.py.
+      if (!this.activeUser || !this.status || !this.activeUser.status_last_updated_at) return '';
+      const verb = this.status.status_code === 'SENT' ? 'sent' : 'accepted';
+      const date = new Date(this.activeUser.status_last_updated_at).toLocaleDateString(
+        'en-US', { month: 'long', day: 'numeric', year: 'numeric' }
+      );
+      return `Your ${this.activeUser.filing_description} was ${verb} on ${date}.`;
     },
 
     async optIn() {
-      if (!this.activeReturnId) return;
+      if (!this.activeUser) return;
       this.optingIn = true;
       try {
         const res = await fetch('/notifications/opt-in', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ return_id: this.activeReturnId, channel: this.notifChannel }),
+          body: JSON.stringify({ return_id: this.activeUser.return_id, channel: this.notifChannel }),
         });
         const data = await res.json();
         this.notifOptedIn = !!data.opted_in;
@@ -540,10 +415,10 @@ function app() {
     },
 
     async loadPreview() {
-      if (!this.activeReturnId) return;
+      if (!this.activeUser) return;
       this.loadingPreview = true;
       try {
-        const res = await fetch(`/notifications/preview/${encodeURIComponent(this.activeReturnId)}`);
+        const res = await fetch(`/notifications/preview/${encodeURIComponent(this.activeUser.return_id)}`);
         const data = await res.json();
         this.previewHtml = data.rendered_html || '';
       } finally {
@@ -603,30 +478,13 @@ function app() {
       // code, never the raw `detail` string -- `detail` is meant for
       // logs/debugging (e.g. "outcome=CONNECTION_FAILURE") and leaking
       // it to a customer contradicts the calm, honest tone the rest of
-      // this page works hard to keep. Found by actually forcing this
-      // path live during a screen-by-screen review, not anticipated
-      // up front. See DECISIONS.md.
+      // this page works hard to keep. See DECISIONS.md.
       const messages = {
         return_not_found: "We couldn't find a return matching that ID and tax year. Double-check the details and try again.",
         invalid_tax_year: 'Please choose one of the 3 most recent tax years.',
         refund_data_unavailable: "We're temporarily unable to check this refund's status. This is rare and usually resolves within moments — please try again shortly.",
       };
       return messages[errorCode] || "We couldn't check that return right now. Please try again in a moment.";
-    },
-
-    formatCurrency(amount) {
-      if (amount === null || amount === undefined) return '';
-      return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
-    },
-    formatDate(isoDate) {
-      if (!isoDate) return '';
-      const d = new Date(isoDate + 'T00:00:00');
-      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    },
-    formatDateTime(isoDateTime) {
-      if (!isoDateTime) return '';
-      const d = new Date(isoDateTime);
-      return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     },
   };
 }

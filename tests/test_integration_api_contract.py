@@ -73,6 +73,21 @@ def test_refund_status_no_refund_pending_matches_contract(client, contract) -> N
     )
 
 
+def test_refund_status_approved_overdue_matches_contract(client, contract) -> None:
+    """RET-2025-00006's predicted_window is suppressed (null) once its
+    window has elapsed relative to status_last_updated_at -- a third,
+    non-terminal reason for a null predicted_window alongside the
+    no-refund-pending and paper-filed cases, still contract-valid.
+    """
+    response = client.get("/refund-status/RET-2025-00006", params={"tax_year": 2025})
+    assert response.status_code == 200
+    assert response.json()["status_code"] == "APPROVED"
+    assert response.json()["predicted_window"] is None
+    assert_matches_schema(
+        response.json(), contract, "/refund-status/{return_id}", "get", "200"
+    )
+
+
 def test_refund_status_404_matches_contract(client, contract) -> None:
     response = client.get("/refund-status/RET-9999-99999", params={"tax_year": 2025})
     assert response.status_code == 404
@@ -167,6 +182,43 @@ def test_demo_clear_cache_endpoint_forces_next_lookup_to_be_a_miss(client) -> No
     from app import cache_layer
 
     assert cache_layer.get_fresh_cached_data("RET-2025-00001", 2025) is None
+
+
+def test_demo_list_users_returns_all_six_seed_backed_users(client) -> None:
+    """Not in 03_API_CONTRACT.yaml -- backs the admin screen's "set
+    active user" dropdown. Basic shape check only.
+    """
+    response = client.get("/demo/users")
+    assert response.status_code == 200
+    users = response.json()
+    assert len(users) == 6
+    assert {"user_id", "name", "demo_label"} <= users[0].keys()
+
+
+def test_demo_active_user_defaults_to_user1_when_never_set(client) -> None:
+    response = client.get("/demo/active-user")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["user_id"] == "user1"
+    assert body["return_id"] == "RET-2025-00001"
+    assert body["filing_description"] == "e-file with direct deposit"
+    assert body["status_last_updated_at"] is not None
+
+
+def test_demo_set_active_user_changes_what_active_user_returns(client) -> None:
+    set_response = client.post("/demo/set-active-user", json={"user_id": "user4"})
+    assert set_response.status_code == 200
+    assert set_response.json()["return_id"] == "RET-2025-00004"
+    assert set_response.json()["filing_description"] == "paper-filed return"
+
+    get_response = client.get("/demo/active-user")
+    assert get_response.json()["user_id"] == "user4"
+
+
+def test_demo_set_active_user_rejects_unknown_user_with_400(client) -> None:
+    response = client.post("/demo/set-active-user", json={"user_id": "not-a-real-user"})
+    assert response.status_code == 400
+    assert response.json()["error"] == "unknown_demo_user"
 
 
 def test_docs_and_openapi_json_are_reachable(client) -> None:

@@ -2,7 +2,7 @@
 guarantees, exercised directly against the module. No network, no
 other component involved -- see docs/spec/07_TESTING_STRATEGY.md.
 """
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 
@@ -122,13 +122,14 @@ def test_get_audit_log_returns_defensive_copy() -> None:
     assert len(storage.get_audit_log()) == 1
 
 
-def test_seed_data_covers_all_five_seed_returns() -> None:
+def test_seed_data_covers_all_six_seed_returns() -> None:
     for return_id in (
         "RET-2025-00001",
         "RET-2025-00002",
         "RET-2025-00003",
         "RET-2025-00004",
         "RET-2025-00005",
+        "RET-2025-00006",
     ):
         assert storage.get_tax_return(return_id, 2025) is not None
         assert storage.get_refund_status(return_id, 2025) is not None
@@ -163,3 +164,18 @@ def test_sent_return_is_terminal() -> None:
     status = storage.get_refund_status("RET-2025-00005", 2025)
     assert status is not None
     assert status.status_code == storage.StatusCode.SENT
+
+
+def test_approved_overdue_return_has_a_status_last_updated_at_far_in_the_past() -> None:
+    """Frontend addition: this return's whole purpose is to demonstrate
+    a predicted window that has already elapsed -- see
+    refund_status.py's anchor-on-status_last_updated_at logic and
+    DECISIONS.md. A status change this old guarantees APPROVED's 7-14
+    day window (refund_logic.py) has passed no matter when the test
+    suite actually runs.
+    """
+    tax_return = storage.get_tax_return("RET-2025-00006", 2025)
+    status = storage.get_refund_status("RET-2025-00006", 2025)
+    assert tax_return is not None and status is not None
+    assert status.status_code == storage.StatusCode.APPROVED
+    assert (date.today() - status.status_last_updated_at.date()).days > 14

@@ -100,6 +100,7 @@ def test_full_refund_status_lookup_produces_no_pii_in_log_output(
             "RET-2025-00003",
             "RET-2025-00004",
             "RET-2025-00005",
+            "RET-2025-00006",
         ):
             refund_status.get_refund_status_view(return_id, 2025)
 
